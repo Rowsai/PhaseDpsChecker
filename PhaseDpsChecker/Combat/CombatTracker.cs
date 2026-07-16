@@ -209,6 +209,7 @@ public sealed class CombatTracker : IDisposable
 					SnapshotStatuses(group.Key)), memberIds);
 			}
 		}
+		TryEndPhaseForDefeatedAnchor(rawAction.Timestamp, rawAction.Effects);
 	}
 
 	private void ProcessPeriodicEvent(RawPeriodicEvent periodicEvent, IReadOnlyDictionary<uint, string> members, IReadOnlySet<uint> memberIds)
@@ -275,6 +276,21 @@ public sealed class CombatTracker : IDisposable
 		ActionKind kind = value?.Kind ?? ActionKind.Other;
 		EffectSample item = new EffectSample(periodicEvent.TargetEntityId, (!periodicEvent.IsHealing) ? periodicEvent.Amount : 0u, periodicEvent.IsHealing ? periodicEvent.Amount : 0u, Critical: false, DirectHit: false);
 		Aggregator.RecordAction(new CombatActionEvent(periodicEvent.Timestamp, num, value2, actionId, actionName, kind, CountsAsUse: false, IsGcd: false, 0.0, [item]), memberIds);
+		TryEndPhaseForDefeatedAnchor(periodicEvent.Timestamp, [item]);
+	}
+
+	private void TryEndPhaseForDefeatedAnchor(DateTime timestamp, IReadOnlyList<EffectSample> effects)
+	{
+		if (Aggregator.CurrentPhase == null || anchorTargetEntityId == 0)
+		{
+			return;
+		}
+		IGameObject? anchor = objectTable.SearchByEntityId(anchorTargetEntityId);
+		bool anchorIsDefeated = anchor is ICharacter character && (character.IsDead || character.CurrentHp == 0);
+		if (PhaseEndDetection.IsDefeatingHit(anchorTargetEntityId, effects, anchorIsDefeated))
+		{
+			EndPhase(timestamp);
+		}
 	}
 
 	private IReadOnlyList<CombatStatusSnapshot> SnapshotStatuses(uint targetEntityId)

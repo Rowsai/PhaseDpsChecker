@@ -25,6 +25,9 @@ public sealed class MainWindow : Window, IDisposable
 	private uint selectedIncomingEntityId;
 	private SummarySortColumn summarySortColumn = SummarySortColumn.Phase;
 	private bool summarySortDescending;
+	private IncomingSortColumn incomingSortColumn = IncomingSortColumn.Phase;
+	private bool incomingSortDescending;
+	private readonly Dictionary<string, (ActionSortColumn Column, bool Descending)> actionSortStates = new Dictionary<string, (ActionSortColumn, bool)>();
 
 	private enum SummarySortColumn
 	{
@@ -40,12 +43,37 @@ public sealed class MainWindow : Window, IDisposable
 		Active
 	}
 
+	private enum IncomingSortColumn
+	{
+		Phase,
+		Player,
+		Start,
+		End,
+		Amount,
+		Action,
+		Statuses
+	}
+
+	private enum ActionSortColumn
+	{
+		Number,
+		Action,
+		Count,
+		TotalDamage,
+		TotalHealing,
+		Critical,
+		DirectHit,
+		CriticalDirectHit,
+		Maximum,
+		Minimum
+	}
+
 	private sealed record SummaryRowData(PhaseRecord Phase, PlayerPhaseStatistics Player, double Dps, double ActiveRate);
 
 	private sealed record IncomingRowData(PhaseRecord Phase, IncomingDamageEvent DamageEvent);
 
 	public MainWindow(Configuration configuration, CombatTracker tracker)
-		: base("Phase DPS Checker ver 0.3.1###PhaseDpsCheckerMain")
+		: base("Phase DPS Checker ver 0.3.2###PhaseDpsCheckerMain")
 	{
 		this.configuration = configuration;
 		this.tracker = tracker;
@@ -348,6 +376,7 @@ public sealed class MainWindow : Window, IDisposable
 				.OrderBy(damageEvent => damageEvent.Timestamp)
 				.Select(damageEvent => new IncomingRowData(phase, damageEvent)))
 			.ToList();
+		rows.Sort(CompareIncomingRows);
 
 		ImGui.Spacing();
 		DrawIncomingCards(rows);
@@ -369,7 +398,7 @@ public sealed class MainWindow : Window, IDisposable
 			ImGui.TableSetupColumn("被ダメージ量");
 			ImGui.TableSetupColumn("エネミー / 攻撃名");
 			ImGui.TableSetupColumn("被ダメージ時のバフ / デバフ");
-			ImGui.TableHeadersRow();
+			DrawSortableIncomingHeader();
 
 			foreach (IncomingRowData row in rows)
 			{
@@ -501,7 +530,7 @@ public sealed class MainWindow : Window, IDisposable
 		}
 
 		ImGui.Spacing();
-		DrawSectionTitle("アクション内訳", "カテゴリ別に使用回数、ダメージ、回復量を表示します。");
+		DrawSectionTitle("アクション内訳", "カテゴリ別に使用回数、ダメージ、回復量を表示します。各ヘッダをクリックすると並び替えできます。");
 		List<ActionStatistics> actions = player.Actions.Values.ToList();
 		DrawActionGroup("ウェポンスキル", actions.Where(action => action.Kind == ActionKind.WeaponSkill), idPrefix);
 		DrawActionGroup("アビリティ", actions.Where(action => action.Kind == ActionKind.Ability && (action.TotalDamage > 0 || action.TotalHealing == 0)), idPrefix);
@@ -564,6 +593,51 @@ public sealed class MainWindow : Window, IDisposable
 		return comparison != 0 ? comparison : StringComparer.CurrentCulture.Compare(left.Player.PlayerName, right.Player.PlayerName);
 	}
 
+	private void DrawSortableIncomingHeader()
+	{
+		string[] labels = ["Phase", "プレイヤー名", "開始時間", "終了時間", "被ダメージ量", "エネミー / 攻撃名", "被ダメージ時のバフ / デバフ"];
+		ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
+		for (int index = 0; index < labels.Length; index++)
+		{
+			ImGui.TableSetColumnIndex(index);
+			IncomingSortColumn column = (IncomingSortColumn)index;
+			string indicator = column == incomingSortColumn ? (incomingSortDescending ? " ▼" : " ▲") : string.Empty;
+			if (ImGui.Selectable($"{labels[index]}{indicator}##IncomingSort{index}", false))
+			{
+				if (incomingSortColumn == column)
+				{
+					incomingSortDescending = !incomingSortDescending;
+				}
+				else
+				{
+					incomingSortColumn = column;
+					incomingSortDescending = column == IncomingSortColumn.Amount;
+				}
+			}
+		}
+	}
+
+	private int CompareIncomingRows(IncomingRowData left, IncomingRowData right)
+	{
+		int comparison = incomingSortColumn switch
+		{
+			IncomingSortColumn.Phase => left.Phase.Number.CompareTo(right.Phase.Number),
+			IncomingSortColumn.Player => StringComparer.CurrentCulture.Compare(left.DamageEvent.PlayerName, right.DamageEvent.PlayerName),
+			IncomingSortColumn.Start => left.Phase.StartedAt.CompareTo(right.Phase.StartedAt),
+			IncomingSortColumn.End => (left.Phase.EndedAt ?? left.DamageEvent.Timestamp).CompareTo(right.Phase.EndedAt ?? right.DamageEvent.Timestamp),
+			IncomingSortColumn.Amount => left.DamageEvent.Amount.CompareTo(right.DamageEvent.Amount),
+			IncomingSortColumn.Action => StringComparer.CurrentCulture.Compare($"{left.DamageEvent.EnemyName} / {left.DamageEvent.ActionName}", $"{right.DamageEvent.EnemyName} / {right.DamageEvent.ActionName}"),
+			IncomingSortColumn.Statuses => StringComparer.CurrentCulture.Compare(FormatStatuses(left.DamageEvent.Statuses), FormatStatuses(right.DamageEvent.Statuses)),
+			_ => 0
+		};
+		if (comparison != 0)
+		{
+			return incomingSortDescending ? -comparison : comparison;
+		}
+		comparison = left.Phase.Number.CompareTo(right.Phase.Number);
+		return comparison != 0 ? comparison : left.DamageEvent.Timestamp.CompareTo(right.DamageEvent.Timestamp);
+	}
+
 	private static void SetupSummaryColumns()
 	{
 		ImGui.TableSetupColumn("Phase");
@@ -611,12 +685,17 @@ public sealed class MainWindow : Window, IDisposable
 		TextColumn(6, FormatStatuses(damageEvent.Statuses));
 	}
 
-	private static void DrawActionGroup(string label, IEnumerable<ActionStatistics> source, string idPrefix)
+	private void DrawActionGroup(string label, IEnumerable<ActionStatistics> source, string idPrefix)
 	{
-		List<ActionStatistics> actions = source
-			.OrderByDescending(action => action.TotalDamage + action.TotalHealing)
-			.ThenBy(action => action.ActionName, StringComparer.CurrentCulture)
-			.ToList();
+		string sortKey = $"{idPrefix}:{label}";
+		ActionSortColumn defaultColumn = label.StartsWith("回復", StringComparison.Ordinal)
+			? ActionSortColumn.TotalHealing
+			: ActionSortColumn.TotalDamage;
+		(ActionSortColumn column, bool descending) = actionSortStates.TryGetValue(sortKey, out var state)
+			? state
+			: (defaultColumn, true);
+		List<ActionStatistics> actions = source.ToList();
+		actions.Sort((left, right) => CompareActions(left, right, column, descending));
 		ImGui.Spacing();
 		ImGui.TextColored(new Vector4(0.35f, 0.76f, 1f, 1f), $"{label}  {actions.Count}種");
 		ImGui.PushID(idPrefix);
@@ -633,7 +712,7 @@ public sealed class MainWindow : Window, IDisposable
 			ImGui.TableSetupColumn("Crit + DH %");
 			ImGui.TableSetupColumn("最大");
 			ImGui.TableSetupColumn("最小");
-			ImGui.TableHeadersRow();
+			DrawSortableActionHeader(sortKey, column, descending);
 			for (int index = 0; index < actions.Count; index++)
 			{
 				ActionStatistics action = actions[index];
@@ -657,6 +736,48 @@ public sealed class MainWindow : Window, IDisposable
 		}
 		ImGui.PopID();
 		ImGui.PopID();
+	}
+
+	private void DrawSortableActionHeader(string sortKey, ActionSortColumn selectedColumn, bool descending)
+	{
+		string[] labels = ["No", "アクション", "回数", "総ダメージ", "総回復量", "Crit %", "DH %", "Crit + DH %", "最大", "最小"];
+		ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
+		for (int index = 0; index < labels.Length; index++)
+		{
+			ImGui.TableSetColumnIndex(index);
+			ActionSortColumn column = (ActionSortColumn)index;
+			string indicator = column == selectedColumn ? (descending ? " ▼" : " ▲") : string.Empty;
+			if (ImGui.Selectable($"{labels[index]}{indicator}##ActionSort{index}", false))
+			{
+				bool nextDescending = column == selectedColumn
+					? !descending
+					: column is not ActionSortColumn.Number and not ActionSortColumn.Action;
+				actionSortStates[sortKey] = (column, nextDescending);
+			}
+		}
+	}
+
+	private static int CompareActions(ActionStatistics left, ActionStatistics right, ActionSortColumn column, bool descending)
+	{
+		int comparison = column switch
+		{
+			ActionSortColumn.Number => left.ActionId.CompareTo(right.ActionId),
+			ActionSortColumn.Action => StringComparer.CurrentCulture.Compare(left.ActionName, right.ActionName),
+			ActionSortColumn.Count => left.UseCount.CompareTo(right.UseCount),
+			ActionSortColumn.TotalDamage => left.TotalDamage.CompareTo(right.TotalDamage),
+			ActionSortColumn.TotalHealing => left.TotalHealing.CompareTo(right.TotalHealing),
+			ActionSortColumn.Critical => left.CriticalRate.CompareTo(right.CriticalRate),
+			ActionSortColumn.DirectHit => left.DirectHitRate.CompareTo(right.DirectHitRate),
+			ActionSortColumn.CriticalDirectHit => left.CriticalDirectHitRate.CompareTo(right.CriticalDirectHitRate),
+			ActionSortColumn.Maximum => left.MaximumAmount.CompareTo(right.MaximumAmount),
+			ActionSortColumn.Minimum => left.DisplayMinimumAmount.CompareTo(right.DisplayMinimumAmount),
+			_ => 0
+		};
+		if (comparison != 0)
+		{
+			return descending ? -comparison : comparison;
+		}
+		return StringComparer.CurrentCulture.Compare(left.ActionName, right.ActionName);
 	}
 
 	private static void DrawPartyCards(IReadOnlyList<PhaseRecord> phases, IReadOnlyList<SummaryRowData> rows, DateTime now)

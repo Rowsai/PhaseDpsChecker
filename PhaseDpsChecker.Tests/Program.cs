@@ -9,6 +9,7 @@ var tests = new (string Name, Action Run)[]
     ("履歴削除後も Phase 番号を維持", PhaseNumberAfterTrim),
     ("全滅時の履歴保存と現在表示クリア", ArchiveCombatHistory),
 	("被ダメージとステータスを履歴へ保存", ArchiveIncomingDamage),
+	("撃破したアンカーへの最終攻撃を判定", DefeatingAnchorHit),
 };
 
 foreach (var test in tests)
@@ -153,6 +154,33 @@ static void ArchiveIncomingDamage()
 	Equal(4321u, incoming.Amount, "incoming amount");
 	Equal("Auto Attack", incoming.ActionName, "incoming action");
 	Equal("Mitigation", incoming.Statuses.Single().Name, "status snapshot");
+}
+
+static void DefeatingAnchorHit()
+{
+	var t0 = new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Utc);
+	var finalHitAt = t0.AddSeconds(8.25);
+	EffectSample[] effects =
+	[
+		new EffectSample(900, 1234, 0, false, false),
+		new EffectSample(901, 567, 0, false, false),
+	];
+	Equal(true, PhaseEndDetection.IsDefeatingHit(900, effects, anchorIsDefeated: true), "defeated anchor hit");
+	Equal(false, PhaseEndDetection.IsDefeatingHit(900, effects, anchorIsDefeated: false), "living anchor");
+	Equal(false, PhaseEndDetection.IsDefeatingHit(999, effects, anchorIsDefeated: true), "different target");
+	Equal(false, PhaseEndDetection.IsDefeatingHit(0, effects, anchorIsDefeated: true), "missing anchor");
+
+	var party = new Dictionary<uint, string> { [1] = "Player" };
+	var partyIds = party.Keys.ToHashSet();
+	var aggregator = new CombatAggregator();
+	aggregator.BeginPhase(t0, party, 900);
+	aggregator.RecordAction(new CombatActionEvent(finalHitAt, 1, "Player", 10, "Final Strike", ActionKind.WeaponSkill, true, true, 2.5, effects), partyIds);
+	if (PhaseEndDetection.IsDefeatingHit(900, effects, anchorIsDefeated: true))
+	{
+		aggregator.EndCurrentPhase(finalHitAt);
+	}
+	Equal(1801L, aggregator.Phases.Single().Players[1].TotalDamage, "final hit damage included");
+	Equal(finalHitAt, aggregator.Phases.Single().EndedAt, "phase ends at final hit timestamp");
 }
 
 static CombatActionEvent Event(DateTime timestamp, uint source, uint actionId, string actionName, EffectSample effect, bool gcd = false, double gcdSeconds = 2.5) =>

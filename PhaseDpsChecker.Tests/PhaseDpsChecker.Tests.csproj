@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="..\PhaseDpsChecker\Combat\ActionKind.cs" Link="Combat\ActionKind.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\PhaseEndDetection.cs" Link="Combat\PhaseEndDetection.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\CombatActionEvent.cs" Link="Combat\CombatActionEvent.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\CombatStatusSnapshot.cs" Link="Combat\CombatStatusSnapshot.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\IncomingDamageEvent.cs" Link="Combat\IncomingDamageEvent.cs" />
