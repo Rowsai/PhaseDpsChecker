@@ -7,11 +7,13 @@ namespace PhaseDpsChecker;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 4;
+	public int Version { get; set; } = 5;
 
 	public uint SelectedEntityId { get; set; }
 
 	public bool ShowPartyOverlay { get; set; }
+
+	public bool ReplayMode { get; set; }
 
 	public PhaseDetectionPreset PhaseDetectionPreset { get; set; } = PhaseDetectionPreset.Normal;
 

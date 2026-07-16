@@ -83,7 +83,7 @@ public sealed class CombatTracker : IDisposable
 		this.dutyState = dutyState;
 		this.log = log;
 		Aggregator = new CombatAggregator();
-		Roster = new PartyRoster(partyList, objectTable);
+		Roster = new PartyRoster(configuration, partyList, objectTable);
 		try
 		{
 			capture = new ActionEffectCapture(interopProvider, log);
@@ -135,6 +135,23 @@ public sealed class CombatTracker : IDisposable
 			ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
 		}
 		configuration.PhaseDetectionPreset = preset;
+		configuration.Save();
+		ResetEncounterDetection();
+	}
+
+	public void SetReplayMode(bool enabled)
+	{
+		if (configuration.ReplayMode == enabled)
+		{
+			return;
+		}
+
+		if (Aggregator.Phases.Count > 0)
+		{
+			ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
+		}
+		configuration.ReplayMode = enabled;
+		configuration.SelectedEntityId = 0;
 		configuration.Save();
 		ResetEncounterDetection();
 	}

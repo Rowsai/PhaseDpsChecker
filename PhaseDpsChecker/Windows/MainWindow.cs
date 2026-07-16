@@ -154,6 +154,18 @@ public sealed class MainWindow : Window, IDisposable
 
 	private void DrawSettings()
 	{
+		DrawSectionTitle("動作モード", "コンテンツリプレイ再生時のパーティ識別方法を設定します。");
+		bool replayMode = configuration.ReplayMode;
+		if (ImGui.Checkbox("コンテンツリプレイ動作モード", ref replayMode))
+		{
+			tracker.SetReplayMode(replayMode);
+		}
+		if (ImGui.IsItemHovered())
+		{
+			ImGui.SetTooltip("Dark KnightやWhite Mageなど、ジョブ名で表示されるリプレイ内アクターをパーティメンバーとして集計します。通常プレイ時は無効にしてください。");
+		}
+
+		ImGui.Spacing();
 		DrawSectionTitle("表示設定", "ライブ表示の対象と計測条件を設定します。");
 		Dictionary<uint, string> currentMembers = tracker.Roster.GetCurrentMembers();
 

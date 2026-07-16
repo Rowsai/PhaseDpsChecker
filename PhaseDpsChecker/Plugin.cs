@@ -65,13 +65,13 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	public Plugin()
 	{
 		Configuration = (PluginInterface.GetPluginConfig() as Configuration) ?? new Configuration();
-		if (Configuration.Version < 4)
+		if (Configuration.Version < 5)
 		{
 			if (Configuration.MaxEncounterHistory <= 0)
 			{
 				Configuration.MaxEncounterHistory = 20;
 			}
-			Configuration.Version = 4;
+			Configuration.Version = 5;
 			Configuration.Save();
 		}
 		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, ChatGui, GameInteropProvider, Log);

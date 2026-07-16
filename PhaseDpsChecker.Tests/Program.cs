@@ -13,6 +13,7 @@ var tests = new (string Name, Action Run)[]
 	("絶妖星乱舞の専用フェーズ遷移", FuturesRewrittenPhaseTransitions),
 	("絶妖星乱舞 Phase 2 は敵視リスト消失で終了", FuturesRewrittenEnemyListTransition),
 	("絶妖星乱舞 Phase 3 はメテオ中断ログで終了", FuturesRewrittenPhase3BattleLogTransition),
+	("リプレイのジョブ名メンバーを識別", ReplayPartyMemberResolution),
 };
 
 foreach (var test in tests)
@@ -229,6 +230,16 @@ static void FuturesRewrittenPhase3BattleLogTransition()
 	Equal(DedicatedPhaseTransition.None, controller.OnDialogue("エクスデスは「メテオ」を実行した。"), "ignore a different battle log");
 	Equal(DedicatedPhaseTransition.None, controller.OnFirstPartyAttack(), "ignore party attack during phase 3");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnDialogue("バトルログ：エクスデスは「メテオ」を中断した。"), "end on the meteor interruption log");
+}
+
+static void ReplayPartyMemberResolution()
+{
+	Equal(true, ReplayPartyMemberNames.TryResolve("Dark Knight", 32, out uint darkKnightJobId), "resolve Dark Knight");
+	Equal(32u, darkKnightJobId, "Dark Knight job id");
+	Equal(true, ReplayPartyMemberNames.TryResolve(" white mage ", 0, out uint whiteMageJobId), "resolve trimmed White Mage");
+	Equal(24u, whiteMageJobId, "White Mage fallback job id");
+	Equal(false, ReplayPartyMemberNames.TryResolve("Dark Knight", 24, out _), "reject mismatched job id");
+	Equal(false, ReplayPartyMemberNames.TryResolve("Player Name", 32, out _), "reject normal player name");
 }
 
 static CombatActionEvent Event(DateTime timestamp, uint source, uint actionId, string actionName, EffectSample effect, bool gcd = false, double gcdSeconds = 2.5) =>

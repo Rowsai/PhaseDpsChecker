@@ -10,12 +10,15 @@ public sealed class PartyRoster
 {
 	private readonly Dictionary<uint, uint> cachedJobIds = new Dictionary<uint, uint>();
 
+	private readonly Configuration configuration;
+
 	private readonly IPartyList partyList;
 
 	private readonly IObjectTable objectTable;
 
-	public PartyRoster(IPartyList partyList, IObjectTable objectTable)
+	public PartyRoster(Configuration configuration, IPartyList partyList, IObjectTable objectTable)
 	{
+		this.configuration = configuration;
 		this.partyList = partyList;
 		this.objectTable = objectTable;
 	}
@@ -38,14 +41,38 @@ public sealed class PartyRoster
 			dictionary.TryAdd(localPlayer.EntityId, localPlayer.Name.TextValue);
 			cachedJobIds[localPlayer.EntityId] = localPlayer.ClassJob.RowId;
 		}
+		if (configuration.ReplayMode)
+		{
+			AddReplayMembers(dictionary);
+		}
 		return dictionary;
+	}
+
+	private void AddReplayMembers(IDictionary<uint, string> members)
+	{
+		foreach (IGameObject gameObject in objectTable)
+		{
+			if (gameObject is not ICharacter character || character.EntityId == 0)
+			{
+				continue;
+			}
+
+			string displayName = character.Name.TextValue;
+			if (!ReplayPartyMemberNames.TryResolve(displayName, character.ClassJob.RowId, out uint jobId))
+			{
+				continue;
+			}
+
+			members[character.EntityId] = displayName.Trim();
+			cachedJobIds[character.EntityId] = jobId;
+		}
 	}
 
 	public uint GetJobId(uint entityId)
 	{
-		if (objectTable.SearchByEntityId(entityId) is IPlayerCharacter playerCharacter && playerCharacter.ClassJob.RowId != 0)
+		if (objectTable.SearchByEntityId(entityId) is ICharacter character && character.ClassJob.RowId != 0)
 		{
-			uint currentJobId = playerCharacter.ClassJob.RowId;
+			uint currentJobId = character.ClassJob.RowId;
 			cachedJobIds[entityId] = currentJobId;
 			return currentJobId;
 		}
