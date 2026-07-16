@@ -10,7 +10,7 @@ namespace PhaseDpsChecker.Windows;
 
 public sealed class MainWindow : Window, IDisposable
 {
-	private const int BlueThemeColorCount = 24;
+	internal const int BlueThemeColorCount = 24;
 
 	private static readonly ImGuiTableFlags TableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable | ImGuiTableFlags.RowBg;
 
@@ -45,7 +45,7 @@ public sealed class MainWindow : Window, IDisposable
 	private sealed record IncomingRowData(PhaseRecord Phase, IncomingDamageEvent DamageEvent);
 
 	public MainWindow(Configuration configuration, CombatTracker tracker)
-		: base("Phase DPS Checker ver 0.3.0###PhaseDpsCheckerMain")
+		: base("Phase DPS Checker ver 0.3.1###PhaseDpsCheckerMain")
 	{
 		this.configuration = configuration;
 		this.tracker = tracker;
@@ -154,6 +154,18 @@ public sealed class MainWindow : Window, IDisposable
 				}
 			}
 			ImGui.EndCombo();
+		}
+
+		ImGui.Spacing();
+		bool showPartyOverlay = configuration.ShowPartyOverlay;
+		if (ImGui.Checkbox("パーティメンバー全体をオーバーレイ表示", ref showPartyOverlay))
+		{
+			configuration.ShowPartyOverlay = showPartyOverlay;
+			configuration.Save();
+		}
+		if (ImGui.IsItemHovered())
+		{
+			ImGui.SetTooltip("表示対象の選択に関係なく、ライブのパーティ全体集計を画面上へ表示します。");
 		}
 
 		ImGui.Spacing();
@@ -802,7 +814,7 @@ public sealed class MainWindow : Window, IDisposable
 		return $"{rate * 100.0:0.00}%";
 	}
 
-	private static void PushBlueTheme()
+	internal static void PushBlueTheme()
 	{
 		ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.012f, 0.032f, 0.058f, 0.98f));
 		ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.025f, 0.085f, 0.14f, 0.92f));

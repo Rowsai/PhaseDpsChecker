@@ -17,6 +17,8 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 
 	private readonly MainWindow mainWindow;
 
+	private readonly PartyOverlayWindow partyOverlayWindow;
+
 	private readonly CombatTracker combatTracker;
 
 	[PluginService]
@@ -30,6 +32,9 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 
 	[PluginService]
 	internal static IDataManager DataManager { get; private set; }
+
+	[PluginService]
+	internal static ITextureProvider TextureProvider { get; private set; }
 
 	[PluginService]
 	internal static IObjectTable ObjectTable { get; private set; }
@@ -57,31 +62,33 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	public Plugin()
 	{
 		Configuration = (PluginInterface.GetPluginConfig() as Configuration) ?? new Configuration();
-		if (Configuration.Version < 2)
+		if (Configuration.Version < 3)
 		{
-			Configuration.Version = 2;
 			if (Configuration.MaxEncounterHistory <= 0)
 			{
 				Configuration.MaxEncounterHistory = 20;
 			}
+			Configuration.Version = 3;
 			Configuration.Save();
 		}
 		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, GameInteropProvider, Log);
+		partyOverlayWindow = new PartyOverlayWindow(combatTracker);
 		mainWindow = new MainWindow(Configuration, combatTracker);
 		windowSystem.AddWindow(mainWindow);
+		windowSystem.AddWindow(partyOverlayWindow);
 		CommandManager.AddHandler("/phasedps", new CommandInfo(OnCommand)
 		{
 			HelpMessage = "Phase DPS Checker を開閉します。",
 			ShowInHelp = true
 		});
-		PluginInterface.UiBuilder.Draw += windowSystem.Draw;
+		PluginInterface.UiBuilder.Draw += DrawUi;
 		PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUi;
 		PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
 	}
 
 	public void Dispose()
 	{
-		PluginInterface.UiBuilder.Draw -= windowSystem.Draw;
+		PluginInterface.UiBuilder.Draw -= DrawUi;
 		PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
 		PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 		CommandManager.RemoveHandler("/phasedps");
@@ -98,5 +105,11 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	private void ToggleMainUi()
 	{
 		mainWindow.Toggle();
+	}
+
+	private void DrawUi()
+	{
+		partyOverlayWindow.IsOpen = Configuration.ShowPartyOverlay;
+		windowSystem.Draw();
 	}
 }

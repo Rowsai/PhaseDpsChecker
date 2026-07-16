@@ -8,6 +8,8 @@ namespace PhaseDpsChecker.Combat;
 
 public sealed class PartyRoster
 {
+	private readonly Dictionary<uint, uint> cachedJobIds = new Dictionary<uint, uint>();
+
 	private readonly IPartyList partyList;
 
 	private readonly IObjectTable objectTable;
@@ -27,14 +29,27 @@ public sealed class PartyRoster
 			if (partyMember != null && partyMember.EntityId != 0)
 			{
 				dictionary[partyMember.EntityId] = partyMember.Name.TextValue;
+				cachedJobIds[partyMember.EntityId] = partyMember.ClassJob.RowId;
 			}
 		}
 		IPlayerCharacter localPlayer = objectTable.LocalPlayer;
 		if (localPlayer != null && localPlayer.EntityId != 0)
 		{
 			dictionary.TryAdd(localPlayer.EntityId, localPlayer.Name.TextValue);
+			cachedJobIds[localPlayer.EntityId] = localPlayer.ClassJob.RowId;
 		}
 		return dictionary;
+	}
+
+	public uint GetJobId(uint entityId)
+	{
+		if (objectTable.SearchByEntityId(entityId) is IPlayerCharacter playerCharacter && playerCharacter.ClassJob.RowId != 0)
+		{
+			uint currentJobId = playerCharacter.ClassJob.RowId;
+			cachedJobIds[entityId] = currentJobId;
+			return currentJobId;
+		}
+		return cachedJobIds.TryGetValue(entityId, out uint cachedJobId) ? cachedJobId : 0u;
 	}
 
 	public uint ResolvePartyOwner(uint sourceEntityId, IReadOnlyDictionary<uint, string> members)

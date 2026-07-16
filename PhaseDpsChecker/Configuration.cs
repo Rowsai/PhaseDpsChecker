@@ -6,9 +6,11 @@ namespace PhaseDpsChecker;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 2;
+	public int Version { get; set; } = 3;
 
 	public uint SelectedEntityId { get; set; }
+
+	public bool ShowPartyOverlay { get; set; }
 
 	public float TargetLossGraceSeconds { get; set; } = 0.75f;
 
