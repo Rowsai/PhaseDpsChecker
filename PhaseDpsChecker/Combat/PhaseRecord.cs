@@ -15,6 +15,8 @@ public sealed class PhaseRecord
 
 	public Dictionary<uint, PlayerPhaseStatistics> Players { get; } = new Dictionary<uint, PlayerPhaseStatistics>();
 
+	public List<IncomingDamageEvent> IncomingDamageEvents { get; } = new List<IncomingDamageEvent>();
+
 	public bool IsActive => !EndedAt.HasValue;
 
 	public PhaseRecord(int number, DateTime startedAt, uint anchorTargetId)
@@ -46,5 +48,10 @@ public sealed class PhaseRecord
 			value.UpdateName(playerName);
 		}
 		return value;
+	}
+
+	internal void AddIncomingDamage(IncomingDamageEvent damageEvent)
+	{
+		IncomingDamageEvents.Add(damageEvent);
 	}
 }

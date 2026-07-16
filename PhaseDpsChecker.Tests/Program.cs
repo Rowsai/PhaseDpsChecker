@@ -8,6 +8,7 @@ var tests = new (string Name, Action Run)[]
     ("DoT tick は使用回数を増やさない", PeriodicTickDoesNotCountAsUse),
     ("履歴削除後も Phase 番号を維持", PhaseNumberAfterTrim),
     ("全滅時の履歴保存と現在表示クリア", ArchiveCombatHistory),
+	("被ダメージとステータスを履歴へ保存", ArchiveIncomingDamage),
 };
 
 foreach (var test in tests)
@@ -118,6 +119,40 @@ static void ArchiveCombatHistory()
     Equal(1200L, history.Phases.Single().Players[1].TotalDamage, "archived total damage");
     var next = aggregator.BeginPhase(t0.AddSeconds(20), party, 901);
     Equal(1, next.Number, "phase number reset for next combat");
+}
+
+static void ArchiveIncomingDamage()
+{
+	var t0 = new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Utc);
+	var party = new Dictionary<uint, string> { [1] = "Tank", [2] = "Healer" };
+	var partyIds = party.Keys.ToHashSet();
+	var aggregator = new CombatAggregator();
+	aggregator.BeginPhase(t0, party, 900);
+	aggregator.RecordIncomingDamage(new IncomingDamageEvent(
+		t0.AddSeconds(2),
+		1,
+		"Tank",
+		900,
+		"Enemy",
+		7,
+		"Auto Attack",
+		4321,
+		[new CombatStatusSnapshot(100, "Mitigation", 1, 8.5f)]), partyIds);
+	aggregator.RecordIncomingDamage(new IncomingDamageEvent(
+		t0.AddSeconds(3),
+		999,
+		"Not Party",
+		900,
+		"Enemy",
+		8,
+		"Ignored",
+		9999,
+		[]), partyIds);
+	var history = aggregator.ArchiveCurrent(t0.AddSeconds(10), CombatHistoryEndReason.Wipe)!;
+	var incoming = history.Phases.Single().IncomingDamageEvents.Single();
+	Equal(4321u, incoming.Amount, "incoming amount");
+	Equal("Auto Attack", incoming.ActionName, "incoming action");
+	Equal("Mitigation", incoming.Statuses.Single().Name, "status snapshot");
 }
 
 static CombatActionEvent Event(DateTime timestamp, uint source, uint actionId, string actionName, EffectSample effect, bool gcd = false, double gcdSeconds = 2.5) =>

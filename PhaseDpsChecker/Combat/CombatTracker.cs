@@ -155,35 +155,89 @@ public sealed class CombatTracker : IDisposable
 		{
 			return;
 		}
-		uint num = Roster.ResolvePartyOwner(rawAction.SourceEntityId, members);
-		if (num == 0 || !members.TryGetValue(num, out string value))
+		uint partyOwnerId = Roster.ResolvePartyOwner(rawAction.SourceEntityId, members);
+		string playerName = string.Empty;
+		bool isPartySource = partyOwnerId != 0 && members.TryGetValue(partyOwnerId, out playerName);
+		bool hasOutgoingDamage = isPartySource && rawAction.Effects.Any((EffectSample effect) => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId));
+		List<IGrouping<uint, EffectSample>> incomingGroups = (from effect in rawAction.Effects
+			where effect.Damage != 0 && memberIds.Contains(effect.TargetEntityId) && !isPartySource
+			group effect by effect.TargetEntityId).ToList();
+		(string actionName, ActionKind kind, bool isGcd, double gcdDurationSeconds) = ResolveAction(rawAction.ActionId);
+		if (isPartySource)
 		{
-			return;
-		}
-		bool flag = rawAction.Effects.Any((EffectSample effect) => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId));
-		(string, ActionKind, bool, double) tuple = ResolveAction(rawAction.ActionId);
-		foreach (StatusApplication statusApplication in rawAction.StatusApplications)
-		{
-			periodicAttributions[new PeriodicKey(num, statusApplication.TargetEntityId, statusApplication.StatusId)] = new PeriodicAttribution(num, rawAction.ActionId, tuple.Item1, tuple.Item2, rawAction.Timestamp);
+			foreach (StatusApplication statusApplication in rawAction.StatusApplications)
+			{
+				periodicAttributions[new PeriodicKey(partyOwnerId, statusApplication.TargetEntityId, statusApplication.StatusId)] = new PeriodicAttribution(partyOwnerId, rawAction.ActionId, actionName, kind, rawAction.Timestamp);
+			}
 		}
 		if (Aggregator.CurrentPhase == null)
 		{
-			if (!flag)
+			if (!hasOutgoingDamage && incomingGroups.Count == 0)
 			{
 				return;
 			}
-			anchorTargetEntityId = ChooseAnchorTarget(rawAction.Effects, memberIds);
+			anchorTargetEntityId = hasOutgoingDamage ? ChooseAnchorTarget(rawAction.Effects, memberIds) : rawAction.SourceEntityId;
 			Aggregator.BeginPhase(rawAction.Timestamp, members, anchorTargetEntityId);
 			anchorWasTargetable = false;
 			anchorLostAt = null;
 			combatLostAt = null;
 		}
-		Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, num, value, rawAction.ActionId, tuple.Item1, tuple.Item2, CountsAsUse: true, tuple.Item3, tuple.Item4, rawAction.Effects), memberIds);
+		if (isPartySource)
+		{
+			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, partyOwnerId, playerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects), memberIds);
+		}
+		if (incomingGroups.Count != 0)
+		{
+			string enemyName = ResolveGameObjectName(rawAction.SourceEntityId, "不明なエネミー");
+			string incomingActionName = NormalizeIncomingActionName(rawAction.ActionId, actionName);
+			foreach (IGrouping<uint, EffectSample> group in incomingGroups)
+			{
+				if (!members.TryGetValue(group.Key, out string targetPlayerName))
+				{
+					continue;
+				}
+				ulong total = group.Aggregate<EffectSample, ulong>(0, (current, effect) => current + effect.Damage);
+				Aggregator.RecordIncomingDamage(new IncomingDamageEvent(
+					rawAction.Timestamp,
+					group.Key,
+					targetPlayerName,
+					rawAction.SourceEntityId,
+					enemyName,
+					rawAction.ActionId,
+					incomingActionName,
+					(uint)Math.Min(total, uint.MaxValue),
+					SnapshotStatuses(group.Key)), memberIds);
+			}
+		}
 	}
 
 	private void ProcessPeriodicEvent(RawPeriodicEvent periodicEvent, IReadOnlyDictionary<uint, string> members, IReadOnlySet<uint> memberIds)
 	{
 		uint num = Roster.ResolvePartyOwner(periodicEvent.SourceEntityId, members);
+		bool targetsParty = memberIds.Contains(periodicEvent.TargetEntityId);
+		if (!periodicEvent.IsHealing && targetsParty && num == 0 && members.TryGetValue(periodicEvent.TargetEntityId, out string targetPlayerName))
+		{
+			if (Aggregator.CurrentPhase == null)
+			{
+				anchorTargetEntityId = periodicEvent.SourceEntityId;
+				Aggregator.BeginPhase(periodicEvent.Timestamp, members, anchorTargetEntityId);
+				anchorWasTargetable = false;
+				anchorLostAt = null;
+				combatLostAt = null;
+			}
+			string statusName = ResolveStatusName(periodicEvent.StatusId);
+			Aggregator.RecordIncomingDamage(new IncomingDamageEvent(
+				periodicEvent.Timestamp,
+				periodicEvent.TargetEntityId,
+				targetPlayerName,
+				periodicEvent.SourceEntityId,
+				ResolveGameObjectName(periodicEvent.SourceEntityId, "継続ダメージ"),
+				0x80000000u | periodicEvent.StatusId,
+				$"{statusName} (DoT)",
+				periodicEvent.Amount,
+				SnapshotStatuses(periodicEvent.TargetEntityId)), memberIds);
+			return;
+		}
 		PeriodicAttribution value = null;
 		if (num != 0)
 		{
@@ -201,7 +255,7 @@ public sealed class CombatTracker : IDisposable
 		{
 			return;
 		}
-		bool flag = memberIds.Contains(periodicEvent.TargetEntityId);
+		bool flag = targetsParty;
 		bool flag2 = !periodicEvent.IsHealing && !flag;
 		if (Aggregator.CurrentPhase == null)
 		{
@@ -221,6 +275,48 @@ public sealed class CombatTracker : IDisposable
 		ActionKind kind = value?.Kind ?? ActionKind.Other;
 		EffectSample item = new EffectSample(periodicEvent.TargetEntityId, (!periodicEvent.IsHealing) ? periodicEvent.Amount : 0u, periodicEvent.IsHealing ? periodicEvent.Amount : 0u, Critical: false, DirectHit: false);
 		Aggregator.RecordAction(new CombatActionEvent(periodicEvent.Timestamp, num, value2, actionId, actionName, kind, CountsAsUse: false, IsGcd: false, 0.0, [item]), memberIds);
+	}
+
+	private IReadOnlyList<CombatStatusSnapshot> SnapshotStatuses(uint targetEntityId)
+	{
+		if (objectTable.SearchByEntityId(targetEntityId) is not IBattleChara battleChara)
+		{
+			return Array.Empty<CombatStatusSnapshot>();
+		}
+		List<CombatStatusSnapshot> statuses = new List<CombatStatusSnapshot>();
+		foreach (var status in battleChara.StatusList)
+		{
+			if (status.StatusId == 0)
+			{
+				continue;
+			}
+			statuses.Add(new CombatStatusSnapshot(
+				status.StatusId,
+				ResolveStatusName(status.StatusId),
+				(ushort)status.Param,
+				Math.Max(0f, status.RemainingTime)));
+		}
+		return statuses.OrderBy((CombatStatusSnapshot status) => status.Name, StringComparer.CurrentCulture).ToArray();
+	}
+
+	private string ResolveGameObjectName(uint entityId, string fallback)
+	{
+		IGameObject? gameObject = objectTable.SearchByEntityId(entityId);
+		if (gameObject == null)
+		{
+			return fallback;
+		}
+		string name = gameObject.Name.TextValue;
+		return string.IsNullOrWhiteSpace(name) ? fallback : name;
+	}
+
+	private static string NormalizeIncomingActionName(uint actionId, string actionName)
+	{
+		if (actionId == 0 || string.IsNullOrWhiteSpace(actionName) || actionName == $"Action #{actionId}")
+		{
+			return "オートアタック";
+		}
+		return actionName;
 	}
 
 	private (string Name, ActionKind Kind, bool IsGcd, double GcdDurationSeconds) ResolveAction(uint actionId)

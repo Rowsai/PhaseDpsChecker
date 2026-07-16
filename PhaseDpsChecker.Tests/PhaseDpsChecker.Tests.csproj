@@ -10,6 +10,8 @@
     <Compile Include="..\PhaseDpsChecker\Combat\ActionKind.cs" Link="Combat\ActionKind.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\CombatActionEvent.cs" Link="Combat\CombatActionEvent.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\CombatStatusSnapshot.cs" Link="Combat\CombatStatusSnapshot.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\IncomingDamageEvent.cs" Link="Combat\IncomingDamageEvent.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\ActionStatistics.cs" Link="Combat\ActionStatistics.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\PlayerPhaseStatistics.cs" Link="Combat\PlayerPhaseStatistics.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\PhaseRecord.cs" Link="Combat\PhaseRecord.cs" />

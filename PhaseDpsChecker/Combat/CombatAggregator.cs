@@ -76,6 +76,17 @@ public sealed class CombatAggregator
 		}
 	}
 
+	public void RecordIncomingDamage(IncomingDamageEvent damageEvent, IReadOnlySet<uint> currentPartyEntityIds)
+	{
+		PhaseRecord currentPhase = CurrentPhase;
+		if (currentPhase == null || damageEvent.Amount == 0 || !currentPartyEntityIds.Contains(damageEvent.PlayerEntityId))
+		{
+			return;
+		}
+		currentPhase.EnsurePlayer(damageEvent.PlayerEntityId, damageEvent.PlayerName);
+		currentPhase.AddIncomingDamage(damageEvent);
+	}
+
 	public bool EndCurrentPhase(DateTime timestamp)
 	{
 		PhaseRecord currentPhase = CurrentPhase;
