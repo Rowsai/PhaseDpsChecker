@@ -70,6 +70,28 @@ public sealed class ActionStatistics
 		AddEffect(effect.Healing, effect.Critical, effect.DirectHit);
 	}
 
+	internal void RestoreState(
+		int useCount,
+		long totalDamage,
+		long totalHealing,
+		int effectCount,
+		int criticalEffects,
+		int directHitEffects,
+		int criticalDirectHitEffects,
+		uint maximumAmount,
+		uint minimumAmount)
+	{
+		UseCount = useCount;
+		TotalDamage = totalDamage;
+		TotalHealing = totalHealing;
+		EffectCount = effectCount;
+		CriticalEffects = criticalEffects;
+		DirectHitEffects = directHitEffects;
+		CriticalDirectHitEffects = criticalDirectHitEffects;
+		MaximumAmount = maximumAmount;
+		MinimumAmount = minimumAmount;
+	}
+
 	private void AddEffect(uint amount, bool critical, bool directHit)
 	{
 		EffectCount++;

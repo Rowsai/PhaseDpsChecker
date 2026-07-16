@@ -14,6 +14,9 @@ var tests = new (string Name, Action Run)[]
 	("絶妖星乱舞 Phase 2 は敵視リスト消失で終了", FuturesRewrittenEnemyListTransition),
 	("絶妖星乱舞 Phase 3 はメテオ中断ログで終了", FuturesRewrittenPhase3BattleLogTransition),
 	("リプレイのジョブ名メンバーを識別", ReplayPartyMemberResolution),
+	("追加リキャストグループの GCD 判定", AdditionalCooldownGroupGcd),
+	("被ダメージ時ステータスを防御系に限定", DefensiveStatusesOnly),
+	("履歴JSONの保存と復元", HistoryPersistenceRoundTrip),
 };
 
 foreach (var test in tests)
@@ -62,6 +65,9 @@ static void HealingTargets()
     var player = aggregator.CurrentPhase!.Players[1];
     Equal(3000L, player.TotalHealing, "party healing");
     Equal(0L, player.TotalDamage, "friendly damage excluded");
+	aggregator.EndCurrentPhase(t0.AddSeconds(10));
+	Near(0.0, player.DamageActiveRate(t0, t0.AddSeconds(10)), 0.001, "healing GCD excluded from damage active");
+	Near(0.25, player.HealingActiveRate(t0, t0.AddSeconds(10)), 0.001, "healing GCD included in healing active");
 }
 
 static void GcdActiveRate()
@@ -73,9 +79,71 @@ static void GcdActiveRate()
     aggregator.BeginPhase(t0, party, 900);
     aggregator.RecordAction(Event(t0, 1, 10, "GCD", new EffectSample(900, 100, 0, false, false), true, 2.5), partyIds);
     aggregator.RecordAction(Event(t0.AddSeconds(2.5), 1, 10, "GCD", new EffectSample(900, 100, 0, false, false), true, 2.5), partyIds);
+	aggregator.RecordAction(new CombatActionEvent(t0.AddSeconds(5), 1, "Player", 11, "DoT GCD", ActionKind.WeaponSkill, true, true, 2.5, [], true), partyIds);
     aggregator.EndCurrentPhase(t0.AddSeconds(10));
     var phase = aggregator.Phases.Single();
-    Near(0.5, phase.Players[1].ActiveRate(phase.StartedAt, phase.EndedAt!.Value), 0.001, "active rate");
+	Near(0.75, phase.Players[1].ActiveRate(phase.StartedAt, phase.EndedAt!.Value), 0.001, "active rate");
+	Near(0.75, phase.Players[1].DamageActiveRate(phase.StartedAt, phase.EndedAt!.Value), 0.001, "damage active rate");
+	Near(0.0, phase.Players[1].HealingActiveRate(phase.StartedAt, phase.EndedAt!.Value), 0.001, "healing active rate");
+}
+
+static void AdditionalCooldownGroupGcd()
+{
+	(bool isGcd, double duration) = ActionGcdClassifier.Resolve(ActionKind.WeaponSkill, 15, 58, 200);
+	Equal(true, isGcd, "additional cooldown group is GCD");
+	Near(2.5, duration, 0.001, "additional GCD uses shared duration");
+
+	(bool magicIsGcd, double magicDuration) = ActionGcdClassifier.Resolve(ActionKind.Magic, 58, 0, 25);
+	Equal(true, magicIsGcd, "primary cooldown group is GCD");
+	Near(2.5, magicDuration, 0.001, "primary GCD duration");
+
+	(bool abilityIsGcd, _) = ActionGcdClassifier.Resolve(ActionKind.Ability, 15, 58, 200);
+	Equal(false, abilityIsGcd, "abilities are not GCD actions");
+}
+
+static void DefensiveStatusesOnly()
+{
+	Equal(true, DefensiveStatusFilter.IsAllowed("Rampart"), "defensive ability");
+	Equal(true, DefensiveStatusFilter.IsAllowed("野戦治療の陣"), "ground healing ability");
+	Equal(true, DefensiveStatusFilter.IsAllowed("アサイラム"), "ground healing buff");
+	Equal(false, DefensiveStatusFilter.IsAllowed("Iron Will"), "tank stance excluded");
+	Equal(false, DefensiveStatusFilter.IsAllowed("Grit"), "tank stance excluded");
+	Equal(false, DefensiveStatusFilter.IsAllowed("Sprint"), "sprint excluded");
+	Equal(false, DefensiveStatusFilter.IsAllowed("食事効果"), "food excluded");
+	Equal(false, DefensiveStatusFilter.IsAllowed("Reassembled"), "offensive buff excluded");
+}
+
+static void HistoryPersistenceRoundTrip()
+{
+	string directory = Path.Combine(Path.GetTempPath(), $"PhaseDpsCheckerTests-{Guid.NewGuid():N}");
+	try
+	{
+		var t0 = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+		var party = new Dictionary<uint, string> { [1] = "Machinist" };
+		var partyIds = party.Keys.ToHashSet();
+		var aggregator = new CombatAggregator();
+		aggregator.BeginPhase(t0, party, 900);
+		aggregator.RecordAction(Event(t0, 1, 10, "Drill", new EffectSample(900, 5000, 0, true, true), true, 2.5), partyIds);
+		aggregator.RecordIncomingDamage(new IncomingDamageEvent(t0.AddSeconds(2), 1, "Machinist", 900, "Enemy", 20, "Attack", 1000, [new CombatStatusSnapshot(1191, "Rampart", 0, 8)]), partyIds);
+		aggregator.ArchiveCurrent(t0.AddSeconds(10), CombatHistoryEndReason.Wipe);
+
+		var store = new CombatHistoryStore(() => directory, directory, (_, _) => { });
+		Equal(true, store.Save(aggregator.Histories), "history saved");
+		IReadOnlyList<CombatHistoryRecord> loaded = store.Load();
+		Equal(1, loaded.Count, "history count restored");
+		PlayerPhaseStatistics player = loaded.Single().Phases.Single().Players[1];
+		Equal(5000L, player.TotalDamage, "damage restored");
+		Equal("Drill", player.Actions[10].ActionName, "action restored");
+		Near(0.25, player.DamageActiveRate(t0, t0.AddSeconds(10)), 0.001, "damage active restored");
+		Equal(1000u, loaded.Single().Phases.Single().IncomingDamageEvents.Single().Amount, "incoming damage restored");
+	}
+	finally
+	{
+		if (Directory.Exists(directory))
+		{
+			Directory.Delete(directory, true);
+		}
+	}
 }
 
 static void PhaseNumberAfterTrim()

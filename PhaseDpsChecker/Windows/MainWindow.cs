@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
+using System.Windows.Forms;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using PhaseDpsChecker.Combat;
@@ -21,6 +25,8 @@ public sealed class MainWindow : Window, IDisposable
 	private int selectedHistoryNumber;
 	private uint selectedHistoryEntityId;
 	private int selectedHistoryPhaseNumber;
+	private bool historySinglePhaseMode;
+	private int selectedHistoryFilterPhaseNumber;
 	private int selectedIncomingHistoryNumber;
 	private uint selectedIncomingEntityId;
 	private SummarySortColumn summarySortColumn = SummarySortColumn.Phase;
@@ -28,6 +34,10 @@ public sealed class MainWindow : Window, IDisposable
 	private IncomingSortColumn incomingSortColumn = IncomingSortColumn.Phase;
 	private bool incomingSortDescending;
 	private readonly Dictionary<string, (ActionSortColumn Column, bool Descending)> actionSortStates = new Dictionary<string, (ActionSortColumn, bool)>();
+	private readonly ConcurrentQueue<string> selectedHistoryDirectories = new();
+	private readonly ConcurrentQueue<string> historyFolderPickerErrors = new();
+	private int historyFolderPickerRunning;
+	private string? historyFolderPickerError;
 
 	private enum SummarySortColumn
 	{
@@ -40,7 +50,9 @@ public sealed class MainWindow : Window, IDisposable
 		DirectHit,
 		CriticalDirectHit,
 		MaximumDamage,
-		Active
+		Active,
+		DamageActive,
+		HealingActive
 	}
 
 	private enum IncomingSortColumn
@@ -68,7 +80,13 @@ public sealed class MainWindow : Window, IDisposable
 		Minimum
 	}
 
-	private sealed record SummaryRowData(PhaseRecord Phase, PlayerPhaseStatistics Player, double Dps, double ActiveRate);
+	private sealed record SummaryRowData(
+		PhaseRecord Phase,
+		PlayerPhaseStatistics Player,
+		double Dps,
+		double ActiveRate,
+		double DamageActiveRate,
+		double HealingActiveRate);
 
 	private sealed record IncomingRowData(PhaseRecord Phase, IncomingDamageEvent DamageEvent);
 
@@ -154,6 +172,16 @@ public sealed class MainWindow : Window, IDisposable
 
 	private void DrawSettings()
 	{
+		while (selectedHistoryDirectories.TryDequeue(out string? selectedDirectory))
+		{
+			tracker.SetHistoryDirectory(selectedDirectory);
+			historyFolderPickerError = null;
+		}
+		while (historyFolderPickerErrors.TryDequeue(out string? pickerError))
+		{
+			historyFolderPickerError = pickerError;
+		}
+
 		DrawSectionTitle("動作モード", "コンテンツリプレイ再生時のパーティ識別方法を設定します。");
 		bool replayMode = configuration.ReplayMode;
 		if (ImGui.Checkbox("コンテンツリプレイ動作モード", ref replayMode))
@@ -245,7 +273,7 @@ public sealed class MainWindow : Window, IDisposable
 		}
 
 		ImGui.Spacing();
-		DrawSectionTitle("計測", "フェーズ判定とメモリ内履歴の保持数を調整します。");
+		DrawSectionTitle("計測", "フェーズ判定と保存する履歴の保持数を調整します。");
 		int maxPhaseHistory = configuration.MaxPhaseHistory;
 		ImGui.SetNextItemWidth(280f);
 		if (ImGui.SliderInt("1戦闘で保持するフェーズ数", ref maxPhaseHistory, 5, 100))
@@ -318,7 +346,80 @@ public sealed class MainWindow : Window, IDisposable
 		{
 			selectedHistoryEntityId = 0;
 			selectedHistoryPhaseNumber = 0;
+			selectedHistoryFilterPhaseNumber = 0;
 		});
+
+		ImGui.TextUnformatted("Phase表示範囲");
+		ImGui.SetNextItemWidth(380f);
+		if (ImGui.BeginListBox("##HistoryPhaseScope", new Vector2(380f, 58f)))
+		{
+			if (ImGui.Selectable("Phase全体表示", !historySinglePhaseMode))
+			{
+				historySinglePhaseMode = false;
+			}
+			if (ImGui.Selectable("Phase個別表示", historySinglePhaseMode))
+			{
+				historySinglePhaseMode = true;
+			}
+			ImGui.EndListBox();
+		}
+
+		ImGui.Spacing();
+		DrawSectionTitle("履歴の自動保存", "戦闘履歴はJSON形式で常に保存され、プラグイン再起動後も読み込まれます。");
+		ImGui.TextDisabled("保存先フォルダー");
+		ImGui.TextWrapped(tracker.HistoryDirectory);
+		if (Interlocked.CompareExchange(ref historyFolderPickerRunning, 0, 0) != 0)
+		{
+			ImGui.BeginDisabled();
+		}
+		if (ImGui.Button("エクスプローラーで保存先を選択..."))
+		{
+			OpenHistoryFolderPicker();
+		}
+		if (Interlocked.CompareExchange(ref historyFolderPickerRunning, 0, 0) != 0)
+		{
+			ImGui.EndDisabled();
+		}
+		ImGui.SameLine();
+		if (ImGui.Button("既定の保存先に戻す"))
+		{
+			tracker.SetHistoryDirectory(string.Empty);
+			historyFolderPickerError = null;
+		}
+		ImGui.TextDisabled($"履歴ファイル: {Path.GetFileName(tracker.HistoryFilePath)}");
+		string? persistenceError = tracker.HistoryPersistenceError ?? historyFolderPickerError;
+		if (!string.IsNullOrWhiteSpace(persistenceError))
+		{
+			ImGui.TextColored(new Vector4(1f, 0.35f, 0.35f, 1f), persistenceError);
+		}
+
+		if (historySinglePhaseMode)
+		{
+			List<PhaseRecord> availablePhases = history.Phases.OrderBy(phase => phase.Number).ToList();
+			if (selectedHistoryFilterPhaseNumber == 0 || availablePhases.All(phase => phase.Number != selectedHistoryFilterPhaseNumber))
+			{
+				selectedHistoryFilterPhaseNumber = availablePhases.First().Number;
+			}
+			ImGui.TextUnformatted("表示するPhase");
+			ImGui.SetNextItemWidth(380f);
+			if (ImGui.BeginListBox("##HistoryPhaseFilter", new Vector2(380f, 88f)))
+			{
+				foreach (PhaseRecord phase in availablePhases)
+				{
+					bool selected = phase.Number == selectedHistoryFilterPhaseNumber;
+					if (ImGui.Selectable(PhaseLabel(phase), selected))
+					{
+						selectedHistoryFilterPhaseNumber = phase.Number;
+						selectedHistoryPhaseNumber = phase.Number;
+					}
+				}
+				ImGui.EndListBox();
+			}
+		}
+
+		IReadOnlyList<PhaseRecord> displayPhases = historySinglePhaseMode
+			? history.Phases.Where(phase => phase.Number == selectedHistoryFilterPhaseNumber).ToList()
+			: history.Phases;
 
 		Dictionary<uint, string> historyMembers = GetHistoryMembers(history);
 		if (selectedHistoryEntityId != 0 && !historyMembers.ContainsKey(selectedHistoryEntityId))
@@ -360,11 +461,11 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.Spacing();
 		if (selectedHistoryEntityId == 0)
 		{
-			DrawPartyOverview(history.Phases, $"履歴 #{history.Number} / パーティメンバー全体", "HistoryPartyOverview", "この履歴には表示可能なフェーズがありません。");
+			DrawPartyOverview(displayPhases, $"履歴 #{history.Number} / パーティメンバー全体", "HistoryPartyOverview", "この履歴には表示可能なフェーズがありません。");
 		}
 		else
 		{
-			DrawPlayerDetail(history.Phases, selectedHistoryEntityId, selectedLabel, ref selectedHistoryPhaseNumber, "HistoryPlayer");
+			DrawPlayerDetail(displayPhases, selectedHistoryEntityId, selectedLabel, ref selectedHistoryPhaseNumber, "HistoryPlayer", !historySinglePhaseMode);
 		}
 	}
 
@@ -405,13 +506,31 @@ public sealed class MainWindow : Window, IDisposable
 			ImGui.EndCombo();
 		}
 
-		List<IncomingRowData> rows = history.Phases
-			.OrderBy(phase => phase.Number)
-			.SelectMany(phase => phase.IncomingDamageEvents
+		List<IncomingRowData> rows = new List<IncomingRowData>();
+		foreach (PhaseRecord phase in history.Phases.OrderBy(phase => phase.Number))
+		{
+			List<IncomingDamageEvent> phaseEvents = phase.IncomingDamageEvents
 				.Where(damageEvent => damageEvent.PlayerEntityId == selectedIncomingEntityId)
 				.OrderBy(damageEvent => damageEvent.Timestamp)
-				.Select(damageEvent => new IncomingRowData(phase, damageEvent)))
-			.ToList();
+				.ToList();
+			if (phaseEvents.Count != 0)
+			{
+				rows.AddRange(phaseEvents.Select(damageEvent => new IncomingRowData(phase, damageEvent)));
+			}
+			else if (phase.Players.TryGetValue(selectedIncomingEntityId, out PlayerPhaseStatistics? phasePlayer))
+			{
+				rows.Add(new IncomingRowData(phase, new IncomingDamageEvent(
+					phase.EndedAt ?? phase.StartedAt,
+					selectedIncomingEntityId,
+					phasePlayer.PlayerName,
+					0,
+					"-",
+					0,
+					"被ダメージなし",
+					0,
+					Array.Empty<CombatStatusSnapshot>())));
+			}
+		}
 		rows.Sort(CompareIncomingRows);
 
 		ImGui.Spacing();
@@ -491,13 +610,15 @@ public sealed class MainWindow : Window, IDisposable
 				phase,
 				player,
 				player.Dps(phase.DurationSeconds(now)),
-				player.ActiveRate(phase.StartedAt, phase.EffectiveEnd(now)))))
+				player.ActiveRate(phase.StartedAt, phase.EffectiveEnd(now)),
+				player.DamageActiveRate(phase.StartedAt, phase.EffectiveEnd(now)),
+				player.HealingActiveRate(phase.StartedAt, phase.EffectiveEnd(now)))))
 			.ToList();
 		rows.Sort(CompareSummaryRows);
 		DrawPartyCards(phases, rows, now);
 		ImGui.Spacing();
 
-		if (!ImGui.BeginTable($"##{tableId}", 10, TableFlags | ImGuiTableFlags.ScrollY, new Vector2(0f, -1f)))
+		if (!ImGui.BeginTable($"##{tableId}", 12, TableFlags | ImGuiTableFlags.ScrollY, new Vector2(0f, -1f)))
 		{
 			return;
 		}
@@ -511,7 +632,7 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.EndTable();
 	}
 
-	private void DrawPlayerDetail(IReadOnlyList<PhaseRecord> sourcePhases, uint entityId, string playerName, ref int selectedPhaseNumber, string idPrefix)
+	private void DrawPlayerDetail(IReadOnlyList<PhaseRecord> sourcePhases, uint entityId, string playerName, ref int selectedPhaseNumber, string idPrefix, bool showPhaseSelector = true)
 	{
 		List<PhaseRecord> phases = sourcePhases.Where(phase => phase.Players.ContainsKey(entityId)).OrderBy(phase => phase.Number).ToList();
 		DrawSectionTitle(playerName, "フェーズ概要とアクション別の内訳です。");
@@ -527,24 +648,27 @@ public sealed class MainWindow : Window, IDisposable
 			phaseNumber = phases[^1].Number;
 		}
 		PhaseRecord phase = phases.First(item => item.Number == phaseNumber);
-		ImGui.TextUnformatted("表示フェーズ");
-		ImGui.SameLine();
-		ImGui.SetNextItemWidth(190f);
-		if (ImGui.BeginCombo($"##{idPrefix}SelectedPhase", PhaseLabel(phase)))
+		if (showPhaseSelector)
 		{
-			foreach (PhaseRecord item in phases)
+			ImGui.TextUnformatted("表示フェーズ");
+			ImGui.SameLine();
+			ImGui.SetNextItemWidth(190f);
+			if (ImGui.BeginCombo($"##{idPrefix}SelectedPhase", PhaseLabel(phase)))
 			{
-				bool selected = item.Number == phaseNumber;
-				if (ImGui.Selectable(PhaseLabel(item), selected))
+				foreach (PhaseRecord item in phases)
 				{
-					phaseNumber = item.Number;
+					bool selected = item.Number == phaseNumber;
+					if (ImGui.Selectable(PhaseLabel(item), selected))
+					{
+						phaseNumber = item.Number;
+					}
+					if (selected)
+					{
+						ImGui.SetItemDefaultFocus();
+					}
 				}
-				if (selected)
-				{
-					ImGui.SetItemDefaultFocus();
-				}
+				ImGui.EndCombo();
 			}
-			ImGui.EndCombo();
 		}
 		selectedPhaseNumber = phaseNumber;
 		phase = phases.First(item => item.Number == phaseNumber);
@@ -554,14 +678,16 @@ public sealed class MainWindow : Window, IDisposable
 		PlayerPhaseStatistics player = phase.Players[entityId];
 		double dps = player.Dps(phase.DurationSeconds(now));
 		double activeRate = player.ActiveRate(phase.StartedAt, phase.EffectiveEnd(now));
+		double damageActiveRate = player.DamageActiveRate(phase.StartedAt, phase.EffectiveEnd(now));
+		double healingActiveRate = player.HealingActiveRate(phase.StartedAt, phase.EffectiveEnd(now));
 		DrawPlayerCards(player, dps, activeRate);
 		ImGui.Spacing();
 
-		if (ImGui.BeginTable($"##{idPrefix}PlayerSummary", 10, TableFlags))
+		if (ImGui.BeginTable($"##{idPrefix}PlayerSummary", 12, TableFlags))
 		{
 			SetupSummaryColumns();
 			ImGui.TableHeadersRow();
-			DrawSummaryRow(new SummaryRowData(phase, player, dps, activeRate), encounterStart, now, dps);
+			DrawSummaryRow(new SummaryRowData(phase, player, dps, activeRate, damageActiveRate, healingActiveRate), encounterStart, now, dps);
 			ImGui.EndTable();
 		}
 
@@ -578,7 +704,7 @@ public sealed class MainWindow : Window, IDisposable
 
 	private void DrawSortableSummaryHeader(string tableId)
 	{
-		string[] labels = ["Phase", "プレイヤー名", "開始時間", "終了時間", "DPS", "Crit %", "DH %", "Crit + DH %", "最大ダメージ / アクション", "Active %"];
+		string[] labels = ["Phase", "プレイヤー名", "開始時間", "終了時間", "DPS", "Crit %", "DH %", "Crit + DH %", "最大ダメージ / アクション", "Active %", "D / Active %", "H / Active %"];
 		ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
 		for (int index = 0; index < labels.Length; index++)
 		{
@@ -594,7 +720,7 @@ public sealed class MainWindow : Window, IDisposable
 				else
 				{
 					summarySortColumn = column;
-					summarySortDescending = column is SummarySortColumn.Dps or SummarySortColumn.Critical or SummarySortColumn.DirectHit or SummarySortColumn.CriticalDirectHit or SummarySortColumn.MaximumDamage or SummarySortColumn.Active;
+					summarySortDescending = column is SummarySortColumn.Dps or SummarySortColumn.Critical or SummarySortColumn.DirectHit or SummarySortColumn.CriticalDirectHit or SummarySortColumn.MaximumDamage or SummarySortColumn.Active or SummarySortColumn.DamageActive or SummarySortColumn.HealingActive;
 				}
 			}
 		}
@@ -614,6 +740,8 @@ public sealed class MainWindow : Window, IDisposable
 			SummarySortColumn.CriticalDirectHit => left.Player.CriticalDirectHitRate.CompareTo(right.Player.CriticalDirectHitRate),
 			SummarySortColumn.MaximumDamage => left.Player.MaximumDamage.CompareTo(right.Player.MaximumDamage),
 			SummarySortColumn.Active => left.ActiveRate.CompareTo(right.ActiveRate),
+			SummarySortColumn.DamageActive => left.DamageActiveRate.CompareTo(right.DamageActiveRate),
+			SummarySortColumn.HealingActive => left.HealingActiveRate.CompareTo(right.HealingActiveRate),
 			_ => 0
 		};
 		if (comparison != 0)
@@ -627,6 +755,44 @@ public sealed class MainWindow : Window, IDisposable
 		}
 		comparison = right.Dps.CompareTo(left.Dps);
 		return comparison != 0 ? comparison : StringComparer.CurrentCulture.Compare(left.Player.PlayerName, right.Player.PlayerName);
+	}
+
+	private void OpenHistoryFolderPicker()
+	{
+		if (Interlocked.CompareExchange(ref historyFolderPickerRunning, 1, 0) != 0)
+		{
+			return;
+		}
+
+		string initialDirectory = tracker.HistoryDirectory;
+		Thread pickerThread = new(() =>
+		{
+			try
+			{
+				using FolderBrowserDialog dialog = new()
+				{
+					Description = "Phase DPS Checker の履歴保存先フォルダーを選択してください。",
+					UseDescriptionForTitle = true,
+					ShowNewFolderButton = true,
+					SelectedPath = Directory.Exists(initialDirectory) ? initialDirectory : string.Empty
+				};
+				if (dialog.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
+				{
+					selectedHistoryDirectories.Enqueue(dialog.SelectedPath);
+				}
+			}
+			catch (Exception ex)
+			{
+				historyFolderPickerErrors.Enqueue($"保存先の選択に失敗しました: {ex.Message}");
+			}
+			finally
+			{
+				Interlocked.Exchange(ref historyFolderPickerRunning, 0);
+			}
+		});
+		pickerThread.IsBackground = true;
+		pickerThread.SetApartmentState(ApartmentState.STA);
+		pickerThread.Start();
 	}
 
 	private void DrawSortableIncomingHeader()
@@ -686,6 +852,8 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.TableSetupColumn("Crit + DH %");
 		ImGui.TableSetupColumn("最大ダメージ / アクション");
 		ImGui.TableSetupColumn("Active %");
+		ImGui.TableSetupColumn("D / Active %");
+		ImGui.TableSetupColumn("H / Active %");
 	}
 
 	private static void DrawSummaryRow(SummaryRowData row, DateTime encounterStart, DateTime now, double maximumDps)
@@ -693,6 +861,10 @@ public sealed class MainWindow : Window, IDisposable
 		PhaseRecord phase = row.Phase;
 		PlayerPhaseStatistics player = row.Player;
 		ImGui.TableNextRow();
+		if (phase.IsActive)
+		{
+			ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.ColorConvertFloat4ToU32(new Vector4(0.04f, 0.34f, 0.62f, 0.62f)));
+		}
 		TextColumn(0, PhaseLabel(phase));
 		TextColumn(1, player.PlayerName);
 		TextColumn(2, FormatElapsed(phase.StartedAt, encounterStart));
@@ -705,6 +877,8 @@ public sealed class MainWindow : Window, IDisposable
 		TextColumn(7, Percent(player.CriticalDirectHitRate));
 		TextColumn(8, player.MaximumDamage == 0 ? "-" : $"{player.MaximumDamage:N0} / {player.MaximumDamageAction}");
 		ProgressColumn(9, row.ActiveRate, 1.0, Percent(row.ActiveRate), new Vector4(0.06f, 0.72f, 0.68f, 0.9f));
+		ProgressColumn(10, row.DamageActiveRate, 1.0, Percent(row.DamageActiveRate), new Vector4(0.08f, 0.55f, 0.95f, 0.9f));
+		ProgressColumn(11, row.HealingActiveRate, 1.0, Percent(row.HealingActiveRate), new Vector4(0.2f, 0.82f, 0.55f, 0.9f));
 	}
 
 	private static void DrawIncomingDamageRow(IncomingRowData row, DateTime encounterStart, uint maximumAmount)
@@ -842,9 +1016,10 @@ public sealed class MainWindow : Window, IDisposable
 
 	private static void DrawIncomingCards(IReadOnlyList<IncomingRowData> rows)
 	{
-		long total = rows.Sum(row => (long)row.DamageEvent.Amount);
-		IncomingRowData? maximum = rows.OrderByDescending(row => row.DamageEvent.Amount).FirstOrDefault();
-		string commonAction = rows
+		List<IncomingRowData> hits = rows.Where(row => row.DamageEvent.Amount > 0).ToList();
+		long total = hits.Sum(row => (long)row.DamageEvent.Amount);
+		IncomingRowData? maximum = hits.OrderByDescending(row => row.DamageEvent.Amount).FirstOrDefault();
+		string commonAction = hits
 			.GroupBy(row => row.DamageEvent.ActionName)
 			.OrderByDescending(group => group.Count())
 			.ThenBy(group => group.Key, StringComparer.CurrentCulture)
@@ -852,7 +1027,7 @@ public sealed class MainWindow : Window, IDisposable
 			.FirstOrDefault() ?? "-";
 		DrawMetricCards([
 			("被ダメージ合計", total.ToString("N0"), new Vector4(1f, 0.42f, 0.32f, 1f)),
-			("ヒット数", rows.Count.ToString("N0"), new Vector4(1f, 0.58f, 0.3f, 1f)),
+			("ヒット数", hits.Count.ToString("N0"), new Vector4(1f, 0.58f, 0.3f, 1f)),
 			("最大被ダメージ", maximum == null ? "-" : maximum.DamageEvent.Amount.ToString("N0"), new Vector4(1f, 0.35f, 0.28f, 1f)),
 			("最多攻撃", commonAction, new Vector4(0.95f, 0.55f, 0.35f, 1f))
 		]);

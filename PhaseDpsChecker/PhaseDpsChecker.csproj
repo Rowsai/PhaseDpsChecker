@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.5.1</Version>
+    <Version>0.6.0</Version>
     <AssemblyName>PhaseDpsChecker</AssemblyName>
     <RootNamespace>PhaseDpsChecker</RootNamespace>
     <Authors>Rowsai</Authors>
@@ -10,5 +10,6 @@
     <IsPackable>false</IsPackable>
     <Nullable>annotations</Nullable>
     <NoWarn>$(NoWarn);CS8632</NoWarn>
+	<UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 </Project>

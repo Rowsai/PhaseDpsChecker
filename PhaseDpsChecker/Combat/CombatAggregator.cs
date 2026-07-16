@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace PhaseDpsChecker.Combat;
 
@@ -58,9 +59,17 @@ public sealed class CombatAggregator
 		}
 		PlayerPhaseStatistics playerPhaseStatistics = currentPhase.EnsurePlayer(actionEvent.SourceEntityId, actionEvent.PlayerName);
 		ActionStatistics action = playerPhaseStatistics.GetAction(actionEvent.ActionId, actionEvent.ActionName, actionEvent.Kind, actionEvent.CountsAsUse);
+		bool hasDamage = actionEvent.IsOffensiveGcd;
+		bool hasHealing = false;
+		foreach (EffectSample effect in actionEvent.Effects)
+		{
+			bool targetsParty = currentPartyEntityIds.Contains(effect.TargetEntityId);
+			hasDamage |= effect.Damage != 0 && !targetsParty;
+			hasHealing |= effect.Healing != 0 && targetsParty;
+		}
 		if (actionEvent.IsGcd)
 		{
-			playerPhaseStatistics.AddGcdInterval(actionEvent.Timestamp, actionEvent.GcdDurationSeconds);
+			playerPhaseStatistics.AddGcdInterval(actionEvent.Timestamp, actionEvent.GcdDurationSeconds, hasDamage, hasHealing);
 		}
 		foreach (EffectSample effect in actionEvent.Effects)
 		{
@@ -121,13 +130,23 @@ public sealed class CombatAggregator
 		}
 	}
 
-	public void TrimArchivedHistory(int maximumEncounters)
+	public bool TrimArchivedHistory(int maximumEncounters)
 	{
+		bool changed = false;
 		maximumEncounters = Math.Max(1, maximumEncounters);
 		while (histories.Count > maximumEncounters)
 		{
 			histories.RemoveAt(0);
+			changed = true;
 		}
+		return changed;
+	}
+
+	internal void RestoreArchivedHistory(IEnumerable<CombatHistoryRecord> restoredHistories)
+	{
+		histories.Clear();
+		histories.AddRange(restoredHistories.OrderBy(history => history.Number));
+		nextHistoryNumber = histories.Count == 0 ? 1 : histories.Max(history => history.Number) + 1;
 	}
 
 	public void ClearCurrent()

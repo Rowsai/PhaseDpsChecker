@@ -8,12 +8,14 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\PhaseDpsChecker\Combat\ActionKind.cs" Link="Combat\ActionKind.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\ActionGcdClassifier.cs" Link="Combat\ActionGcdClassifier.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\PhaseEndDetection.cs" Link="Combat\PhaseEndDetection.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\FuturesRewrittenPhaseController.cs" Link="Combat\FuturesRewrittenPhaseController.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\ReplayPartyMemberNames.cs" Link="Combat\ReplayPartyMemberNames.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\CombatActionEvent.cs" Link="Combat\CombatActionEvent.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\CombatStatusSnapshot.cs" Link="Combat\CombatStatusSnapshot.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\DefensiveStatusFilter.cs" Link="Combat\DefensiveStatusFilter.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\IncomingDamageEvent.cs" Link="Combat\IncomingDamageEvent.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\ActionStatistics.cs" Link="Combat\ActionStatistics.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\PlayerPhaseStatistics.cs" Link="Combat\PlayerPhaseStatistics.cs" />
@@ -21,5 +23,6 @@
     <Compile Include="..\PhaseDpsChecker\Combat\CombatHistoryEndReason.cs" Link="Combat\CombatHistoryEndReason.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\CombatHistoryRecord.cs" Link="Combat\CombatHistoryRecord.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\CombatAggregator.cs" Link="Combat\CombatAggregator.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\CombatHistoryStore.cs" Link="Combat\CombatHistoryStore.cs" />
   </ItemGroup>
 </Project>

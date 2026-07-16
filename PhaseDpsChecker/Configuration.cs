@@ -7,7 +7,7 @@ namespace PhaseDpsChecker;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 5;
+	public int Version { get; set; } = 6;
 
 	public uint SelectedEntityId { get; set; }
 
@@ -20,6 +20,8 @@ public sealed class Configuration : IPluginConfiguration
 	public int MaxPhaseHistory { get; set; } = 50;
 
 	public int MaxEncounterHistory { get; set; } = 20;
+
+	public string HistoryDirectory { get; set; } = string.Empty;
 
 	public void Save()
 	{

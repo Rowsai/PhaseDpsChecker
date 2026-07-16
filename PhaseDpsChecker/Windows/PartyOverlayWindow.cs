@@ -19,7 +19,13 @@ public sealed class PartyOverlayWindow : Window
 
 	private readonly CombatTracker tracker;
 
-	private sealed record OverlayRow(PhaseRecord Phase, PlayerPhaseStatistics Player, double Dps, double ActiveRate);
+	private sealed record OverlayRow(
+		PhaseRecord Phase,
+		PlayerPhaseStatistics Player,
+		double Dps,
+		double ActiveRate,
+		double DamageActiveRate,
+		double HealingActiveRate);
 
 	public PartyOverlayWindow(CombatTracker tracker)
 		: base("Phase DPS Checker Overlay###PhaseDpsCheckerPartyOverlay", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -29,7 +35,7 @@ public sealed class PartyOverlayWindow : Window
 		RespectCloseHotkey = false;
 		SizeConstraints = new WindowSizeConstraints
 		{
-			MinimumSize = new Vector2(900f, 240f),
+			MinimumSize = new Vector2(1080f, 240f),
 			MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
 		};
 		Size = new Vector2(1320f, 420f);
@@ -67,14 +73,16 @@ public sealed class PartyOverlayWindow : Window
 				currentPhase,
 				player,
 				player.Dps(currentPhase.DurationSeconds(now)),
-				player.ActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now))))
+				player.ActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now)),
+				player.DamageActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now)),
+				player.HealingActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now))))
 			.OrderByDescending(row => row.Dps)
 			.ThenBy(row => row.Player.PlayerName, StringComparer.CurrentCulture)
 			.ToList();
 
 		DrawMetrics(currentPhase, rows, now);
 		ImGui.Spacing();
-		if (!ImGui.BeginTable("##PartyOverlayTable", 10, TableFlags, new Vector2(0f, -1f)))
+		if (!ImGui.BeginTable("##PartyOverlayTable", 12, TableFlags, new Vector2(0f, -1f)))
 		{
 			return;
 		}
@@ -116,6 +124,8 @@ public sealed class PartyOverlayWindow : Window
 		TextColumn(7, Percent(row.Player.CriticalDirectHitRate));
 		TextColumn(8, row.Player.MaximumDamage == 0 ? "-" : $"{row.Player.MaximumDamage:N0} / {row.Player.MaximumDamageAction}");
 		ProgressColumn(9, row.ActiveRate, 1.0, Percent(row.ActiveRate), new Vector4(0.06f, 0.72f, 0.68f, 0.9f));
+		ProgressColumn(10, row.DamageActiveRate, 1.0, Percent(row.DamageActiveRate), new Vector4(0.08f, 0.55f, 0.95f, 0.9f));
+		ProgressColumn(11, row.HealingActiveRate, 1.0, Percent(row.HealingActiveRate), new Vector4(0.2f, 0.82f, 0.55f, 0.9f));
 	}
 
 	private static void DrawMetrics(PhaseRecord currentPhase, IReadOnlyList<OverlayRow> rows, DateTime now)
@@ -161,6 +171,8 @@ public sealed class PartyOverlayWindow : Window
 		ImGui.TableSetupColumn("Crit + DH %");
 		ImGui.TableSetupColumn("最大ダメージ / アクション");
 		ImGui.TableSetupColumn("Active %");
+		ImGui.TableSetupColumn("D / Active %");
+		ImGui.TableSetupColumn("H / Active %");
 	}
 
 	private static void TextColumn(int column, string text)

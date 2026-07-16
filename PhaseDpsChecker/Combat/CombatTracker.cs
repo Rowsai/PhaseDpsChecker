@@ -36,6 +36,7 @@ public sealed class CombatTracker : IDisposable
 	private readonly IPluginLog log;
 
 	private readonly ActionEffectCapture? capture;
+	private readonly CombatHistoryStore historyStore;
 
 	private readonly FuturesRewrittenPhaseController futuresRewrittenController = new();
 
@@ -67,6 +68,12 @@ public sealed class CombatTracker : IDisposable
 
 	public PhaseDetectionPreset ActivePreset => configuration.PhaseDetectionPreset;
 
+	public string HistoryDirectory => historyStore.DirectoryPath;
+
+	public string HistoryFilePath => historyStore.FilePath;
+
+	public string? HistoryPersistenceError => historyStore.LastError;
+
 	public string PhaseDetectionStatus => ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate
 		? futuresRewrittenController.StatusLabel
 		: Aggregator.CurrentPhase == null ? "通常計測：開始待ち" : "通常計測：計測中";
@@ -83,6 +90,15 @@ public sealed class CombatTracker : IDisposable
 		this.dutyState = dutyState;
 		this.log = log;
 		Aggregator = new CombatAggregator();
+		historyStore = new CombatHistoryStore(
+			() => configuration.HistoryDirectory,
+			Plugin.PluginInterface.ConfigDirectory.FullName,
+			(exception, message) => log.Error(exception, message));
+		Aggregator.RestoreArchivedHistory(historyStore.Load());
+		if (Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory))
+		{
+			historyStore.Save(Aggregator.Histories);
+		}
 		Roster = new PartyRoster(configuration, partyList, objectTable);
 		try
 		{
@@ -108,6 +124,14 @@ public sealed class CombatTracker : IDisposable
 		clientState.TerritoryChanged -= OnTerritoryChanged;
 		dutyState.DutyWiped -= OnDutyWiped;
 		dutyState.DutyCompleted -= OnDutyCompleted;
+		if (Aggregator.Phases.Count > 0)
+		{
+			ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
+		}
+		else
+		{
+			historyStore.Save(Aggregator.Histories);
+		}
 		capture?.Dispose();
 	}
 
@@ -164,6 +188,14 @@ public sealed class CombatTracker : IDisposable
 	public void ClearArchivedHistory()
 	{
 		Aggregator.ClearArchivedHistory();
+		historyStore.Save(Aggregator.Histories);
+	}
+
+	public void SetHistoryDirectory(string directory)
+	{
+		configuration.HistoryDirectory = directory ?? string.Empty;
+		configuration.Save();
+		historyStore.Save(Aggregator.Histories);
 	}
 
 	private void OnFrameworkUpdate(IFramework frameworkContext)
@@ -222,7 +254,10 @@ public sealed class CombatTracker : IDisposable
 			CompleteDuty(currentMembers, now);
 		}
 		Aggregator.TrimCurrentPhases(configuration.MaxPhaseHistory);
-		Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory);
+		if (Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory))
+		{
+			historyStore.Save(Aggregator.Histories);
+		}
 	}
 
 	private void ProcessRawAction(RawActionEvent rawAction, IReadOnlyDictionary<uint, string> members, IReadOnlySet<uint> memberIds)
@@ -239,7 +274,7 @@ public sealed class CombatTracker : IDisposable
 		List<IGrouping<uint, EffectSample>> incomingGroups = (from effect in rawAction.Effects
 			where effect.Damage != 0 && memberIds.Contains(effect.TargetEntityId) && !isPartySource
 			group effect by effect.TargetEntityId).ToList();
-		(string actionName, ActionKind kind, bool isGcd, double gcdDurationSeconds) = ResolveAction(rawAction.ActionId);
+		(string actionName, ActionKind kind, bool isGcd, double gcdDurationSeconds, bool isOffensiveGcd) = ResolveAction(rawAction.ActionId);
 		if (isPartySource)
 		{
 			foreach (StatusApplication statusApplication in rawAction.StatusApplications)
@@ -273,7 +308,7 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (isPartySource)
 		{
-			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, partyOwnerId, playerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects), memberIds);
+			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, partyOwnerId, playerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects, isOffensiveGcd), memberIds);
 			if (hasOutgoingDamage && ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
 			{
 				lastPartyDamageAt = rawAction.Timestamp;
@@ -420,9 +455,14 @@ public sealed class CombatTracker : IDisposable
 			{
 				continue;
 			}
+			string statusName = ResolveStatusName(status.StatusId);
+			if (!DefensiveStatusFilter.IsAllowed(statusName))
+			{
+				continue;
+			}
 			statuses.Add(new CombatStatusSnapshot(
 				status.StatusId,
-				ResolveStatusName(status.StatusId),
+				statusName,
 				(ushort)status.Param,
 				Math.Max(0f, status.RemainingTime)));
 		}
@@ -449,11 +489,11 @@ public sealed class CombatTracker : IDisposable
 		return actionName;
 	}
 
-	private (string Name, ActionKind Kind, bool IsGcd, double GcdDurationSeconds) ResolveAction(uint actionId)
+	private (string Name, ActionKind Kind, bool IsGcd, double GcdDurationSeconds, bool IsOffensiveGcd) ResolveAction(uint actionId)
 	{
 		if (!dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>().TryGetRow(actionId, out var row))
 		{
-			return (Name: $"Action #{actionId}", Kind: ActionKind.Other, IsGcd: false, GcdDurationSeconds: 0.0);
+			return (Name: $"Action #{actionId}", Kind: ActionKind.Other, IsGcd: false, GcdDurationSeconds: 0.0, IsOffensiveGcd: false);
 		}
 		uint rowId = row.ActionCategory.RowId;
 		ActionKind item = rowId switch
@@ -463,11 +503,13 @@ public sealed class CombatTracker : IDisposable
 			4u => ActionKind.Ability, 
 			_ => ActionKind.Other, 
 		};
-		bool flag = rowId - 2 <= 1;
-		bool item2 = flag && row.CooldownGroup == 58;
-		double item3 = ((row.Recast100ms > 0) ? ((double)(int)row.Recast100ms / 10.0) : 2.5);
+		(bool item2, double item3) = ActionGcdClassifier.Resolve(
+			item,
+			row.CooldownGroup,
+			row.AdditionalCooldownGroup,
+			row.Recast100ms);
 		string text = row.Name.ToString();
-		return (Name: string.IsNullOrWhiteSpace(text) ? $"Action #{actionId}" : text, Kind: item, IsGcd: item2, GcdDurationSeconds: item3);
+		return (Name: string.IsNullOrWhiteSpace(text) ? $"Action #{actionId}" : text, Kind: item, IsGcd: item2, GcdDurationSeconds: item3, IsOffensiveGcd: item2 && row.CanTargetHostile);
 	}
 
 	private string ResolveStatusName(uint statusId)
@@ -686,6 +728,7 @@ public sealed class CombatTracker : IDisposable
 		if (combatHistoryRecord != null)
 		{
 			Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory);
+			historyStore.Save(Aggregator.Histories);
 			log.Information("戦闘履歴 #{Number} を保存しました（{Reason}、{PhaseCount}フェーズ）。", combatHistoryRecord.Number, endReason, combatHistoryRecord.Phases.Count);
 		}
 		configuration.SelectedEntityId = 0u;

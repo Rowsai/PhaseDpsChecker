@@ -6,6 +6,8 @@ namespace PhaseDpsChecker.Combat;
 public sealed class PlayerPhaseStatistics
 {
 	private readonly List<(DateTime Start, DateTime End)> gcdIntervals = new List<(DateTime, DateTime)>();
+	private readonly List<(DateTime Start, DateTime End)> damageGcdIntervals = new List<(DateTime, DateTime)>();
+	private readonly List<(DateTime Start, DateTime End)> healingGcdIntervals = new List<(DateTime, DateTime)>();
 
 	public uint EntityId { get; }
 
@@ -28,6 +30,12 @@ public sealed class PlayerPhaseStatistics
 	public string MaximumDamageAction { get; private set; } = "-";
 
 	public Dictionary<uint, ActionStatistics> Actions { get; } = new Dictionary<uint, ActionStatistics>();
+
+	internal IReadOnlyList<(DateTime Start, DateTime End)> GcdIntervals => gcdIntervals;
+
+	internal IReadOnlyList<(DateTime Start, DateTime End)> DamageGcdIntervals => damageGcdIntervals;
+
+	internal IReadOnlyList<(DateTime Start, DateTime End)> HealingGcdIntervals => healingGcdIntervals;
 
 	public double CriticalRate => DamageRate(CriticalDamageHits);
 
@@ -93,27 +101,19 @@ public sealed class PlayerPhaseStatistics
 		action.AddHealing(effect);
 	}
 
-	internal void AddGcdInterval(DateTime timestamp, double durationSeconds)
+	internal void AddGcdInterval(DateTime timestamp, double durationSeconds, bool countsAsDamage, bool countsAsHealing)
 	{
 		double value = Math.Clamp(durationSeconds, 0.1, 10.0);
 		DateTime dateTime = timestamp.AddSeconds(value);
-		if (gcdIntervals.Count != 0)
+		AddInterval(gcdIntervals, timestamp, dateTime);
+		if (countsAsDamage)
 		{
-			DateTime dateTime2 = timestamp;
-			List<(DateTime Start, DateTime End)> list = gcdIntervals;
-			if (!(dateTime2 > list[list.Count - 1].End))
-			{
-				List<(DateTime Start, DateTime End)> list2 = gcdIntervals;
-				(DateTime, DateTime) tuple = list2[list2.Count - 1];
-				if (dateTime > tuple.Item2)
-				{
-					List<(DateTime Start, DateTime End)> list3 = gcdIntervals;
-					list3[list3.Count - 1] = (tuple.Item1, dateTime);
-				}
-				return;
-			}
+			AddInterval(damageGcdIntervals, timestamp, dateTime);
 		}
-		gcdIntervals.Add((timestamp, dateTime));
+		if (countsAsHealing)
+		{
+			AddInterval(healingGcdIntervals, timestamp, dateTime);
+		}
 	}
 
 	public double Dps(double phaseDurationSeconds)
@@ -127,13 +127,72 @@ public sealed class PlayerPhaseStatistics
 
 	public double ActiveRate(DateTime phaseStart, DateTime phaseEnd)
 	{
+		return ActiveRate(gcdIntervals, phaseStart, phaseEnd);
+	}
+
+	internal void RestoreState(
+		long totalDamage,
+		long totalHealing,
+		int damageHitCount,
+		int criticalDamageHits,
+		int directDamageHits,
+		int criticalDirectDamageHits,
+		uint maximumDamage,
+		string maximumDamageAction,
+		IEnumerable<(DateTime Start, DateTime End)> restoredGcdIntervals,
+		IEnumerable<(DateTime Start, DateTime End)> restoredDamageGcdIntervals,
+		IEnumerable<(DateTime Start, DateTime End)> restoredHealingGcdIntervals)
+	{
+		TotalDamage = totalDamage;
+		TotalHealing = totalHealing;
+		DamageHitCount = damageHitCount;
+		CriticalDamageHits = criticalDamageHits;
+		DirectDamageHits = directDamageHits;
+		CriticalDirectDamageHits = criticalDirectDamageHits;
+		MaximumDamage = maximumDamage;
+		MaximumDamageAction = maximumDamageAction;
+		gcdIntervals.Clear();
+		gcdIntervals.AddRange(restoredGcdIntervals);
+		damageGcdIntervals.Clear();
+		damageGcdIntervals.AddRange(restoredDamageGcdIntervals);
+		healingGcdIntervals.Clear();
+		healingGcdIntervals.AddRange(restoredHealingGcdIntervals);
+		Actions.Clear();
+	}
+
+	public double DamageActiveRate(DateTime phaseStart, DateTime phaseEnd)
+	{
+		return ActiveRate(damageGcdIntervals, phaseStart, phaseEnd);
+	}
+
+	public double HealingActiveRate(DateTime phaseStart, DateTime phaseEnd)
+	{
+		return ActiveRate(healingGcdIntervals, phaseStart, phaseEnd);
+	}
+
+	private static void AddInterval(List<(DateTime Start, DateTime End)> intervals, DateTime start, DateTime end)
+	{
+		if (intervals.Count != 0 && start <= intervals[^1].End)
+		{
+			(DateTime existingStart, DateTime existingEnd) = intervals[^1];
+			if (end > existingEnd)
+			{
+				intervals[^1] = (existingStart, end);
+			}
+			return;
+		}
+		intervals.Add((start, end));
+	}
+
+	private static double ActiveRate(IReadOnlyList<(DateTime Start, DateTime End)> intervals, DateTime phaseStart, DateTime phaseEnd)
+	{
 		double totalSeconds = (phaseEnd - phaseStart).TotalSeconds;
 		if (totalSeconds <= 0.0)
 		{
 			return 0.0;
 		}
 		double num = 0.0;
-		foreach (var gcdInterval in gcdIntervals)
+		foreach (var gcdInterval in intervals)
 		{
 			DateTime dateTime = ((gcdInterval.Start < phaseStart) ? phaseStart : gcdInterval.Start);
 			DateTime dateTime2 = ((gcdInterval.End > phaseEnd) ? phaseEnd : gcdInterval.End);

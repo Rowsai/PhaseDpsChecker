@@ -3,7 +3,7 @@
   "Name": "Phase DPS Checker",
   "InternalName": "PhaseDpsChecker",
   "Punchline": "フェーズ単位でパーティDPSとアクション内訳を確認します。",
-  "Description": "戦闘をフェーズ単位で集計し、パーティ全体とメンバー個別のDPS、Crit/DH率、最大ダメージ、Active%、アクション別ダメージ・回復量を表示します。通常計測と絶妖星乱舞専用のPhase 1～5判定を切り替えられます。コンテンツリプレイ動作モードでは、ジョブ名で表示されるメンバーも集計できます。JOBアイコン付きの現在Phaseオーバーレイ、戦闘履歴、被ダメージ、被弾時のバフ・デバフ表示にも対応しています。\nコマンド: /phasedps",
+  "Description": "戦闘をフェーズ単位で集計し、DPS、Crit/DH率、最大ダメージ、総合・攻撃・回復別Active%、アクション別ダメージ・回復量を表示します。通常計測と絶妖星乱舞専用判定、コンテンツリプレイ動作モード、JOBアイコン付き現在Phaseオーバーレイに対応します。履歴はJSONへ自動保存され、全体／個別Phase表示、被ダメージ0を含む被弾履歴、防御系バフと設置型回復バフの確認ができます。\nコマンド: /phasedps",
   "ApplicableVersion": "any",
   "RepoUrl": "https://github.com/Rowsai/PhaseDpsChecker",
   "IconUrl": "https://raw.githubusercontent.com/Rowsai/PhaseDpsChecker/main/images/icon.png",
