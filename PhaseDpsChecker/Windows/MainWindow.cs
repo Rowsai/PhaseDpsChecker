@@ -73,7 +73,7 @@ public sealed class MainWindow : Window, IDisposable
 	private sealed record IncomingRowData(PhaseRecord Phase, IncomingDamageEvent DamageEvent);
 
 	public MainWindow(Configuration configuration, CombatTracker tracker)
-		: base("Phase DPS Checker ver 0.3.2###PhaseDpsCheckerMain")
+		: base($"Phase DPS Checker ver {GetDisplayVersion()}###PhaseDpsCheckerMain")
 	{
 		this.configuration = configuration;
 		this.tracker = tracker;
@@ -85,6 +85,9 @@ public sealed class MainWindow : Window, IDisposable
 		Size = new Vector2(1380f, 800f);
 		SizeCondition = ImGuiCond.FirstUseEver;
 	}
+
+	private static string GetDisplayVersion() =>
+		typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
 	public void Dispose()
 	{

@@ -3,7 +3,7 @@
   "Name": "Phase DPS Checker",
   "InternalName": "PhaseDpsChecker",
   "Punchline": "フェーズ単位でパーティDPSとアクション内訳を確認します。",
-  "Description": "通常コンテンツと絶妖星乱舞専用のフェーズ条件を切り替え、パーティメンバーのDPS、Crit/DH率、最大ダメージ、GCD稼働率、アクション別のダメージと回復量を表示します。絶妖星乱舞Phase 3のメテオ中断ログ終了、Phase 4の初回パーティ攻撃開始、Phase 5の専用台詞後のケフカ出現開始、撃破攻撃時の即時終了、各履歴グリッドのヘッダソート、JOBアイコン付き現在Phaseオーバーレイ、戦闘履歴、被ダメージと被弾時バフ／デバフ表示にも対応します。\nコマンド: /phasedps\nアイコン画像の制作に生成AIを使用しています。",
+  "Description": "戦闘をフェーズ単位で集計し、パーティ全体とメンバー個別のDPS、Crit/DH率、最大ダメージ、Active%、アクション別ダメージ・回復量を表示します。通常計測と絶妖星乱舞専用のPhase 1～5判定を切り替えられます。JOBアイコン付きの現在Phaseオーバーレイ、戦闘履歴、被ダメージ、被弾時のバフ・デバフ表示にも対応しています。\nコマンド: /phasedps",
   "ApplicableVersion": "any",
   "RepoUrl": "https://github.com/Rowsai/PhaseDpsChecker",
   "IconUrl": "https://raw.githubusercontent.com/Rowsai/PhaseDpsChecker/main/images/icon.png",

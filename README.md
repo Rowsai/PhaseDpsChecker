@@ -1,6 +1,6 @@
 # Phase DPS Checker
 
-Dalamud API 15 / .NET 10 向けの、フェーズ単位パーティ戦闘集計プラグインです。
+戦闘をフェーズ単位で区切り、パーティ全体とメンバー個別の戦闘情報を確認できるDalamudプラグインです。
 
 ![Phase DPS Checker icon](images/icon.png)
 
@@ -51,23 +51,8 @@ https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 - 回復量: パーティメンバーを対象とした回復効果の値を合算（オーバーヒール控除なし）
 - Active%: `CooldownGroup == 58` の魔法／ウェポンスキルが占有する基本GCD区間を重複なく合算し、フェーズ時間で除算
 
-## ビルド
-
-前提は.NET 10 SDKとDalamud API 15です。
-
-```powershell
-dotnet build .\PhaseDpsChecker\PhaseDpsChecker.csproj -c Release
-dotnet run --project .\PhaseDpsChecker.Tests\PhaseDpsChecker.Tests.csproj
-```
-
-既定以外の場所にDalamudがある場合は、`DALAMUD_HOME`へAPI 15のDLLフォルダを指定してください。
-
 ## 注意事項
-
-戦闘データはチャット文字列ではなく、`FFXIVClientStructs`の`ActionEffectHandler.Receive`と`PacketDispatcher.HandleActorControlPacket`を読み取ります。ゲームパッチで内部構造やシグネチャが変わった場合は追随が必要です。
 
 他メンバーの実スキルスピードは取得できないため、Active%はActionシートの基本リキャスト値を使う近似値です。
 
 このプラグインはDPSパーサーに該当するため、Dalamud公式プラグインリポジトリの受け入れ対象外です。私有カスタムリポジトリでの利用を想定しています。
-
-本プロジェクトの初期実装およびドキュメント作成には生成AIを使用しています。公開前にコードのレビュー、ビルド、集計ロジックの自動テストを実施しています。
