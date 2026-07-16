@@ -48,32 +48,31 @@ public sealed class PartyOverlayWindow : Window
 
 	public override void Draw()
 	{
-		IReadOnlyList<PhaseRecord> phases = tracker.Aggregator.Phases;
+		PhaseRecord? currentPhase = tracker.Aggregator.CurrentPhase;
 		ImGui.TextColored(new Vector4(0.36f, 0.78f, 1f, 1f), "PHASE DPS CHECKER  ·  PARTY OVERLAY");
 		ImGui.SameLine();
-		ImGui.TextDisabled("設定タブのチェックで表示を切り替えられます");
+		ImGui.TextDisabled("現在計測中のPhaseのみ表示します");
 		ImGui.Separator();
 
-		if (phases.Count == 0)
+		if (currentPhase == null)
 		{
-			ImGui.TextDisabled("敵へのダメージを検出すると、パーティ全体の集計が表示されます。");
+			ImGui.TextDisabled("現在計測中のPhaseはありません。");
 			return;
 		}
 
 		DateTime now = DateTime.UtcNow;
-		DateTime encounterStart = phases.Min(phase => phase.StartedAt);
-		List<OverlayRow> rows = phases
-			.SelectMany(phase => phase.Players.Values.Select(player => new OverlayRow(
-				phase,
+		DateTime encounterStart = currentPhase.StartedAt;
+		List<OverlayRow> rows = currentPhase.Players.Values
+			.Select(player => new OverlayRow(
+				currentPhase,
 				player,
-				player.Dps(phase.DurationSeconds(now)),
-				player.ActiveRate(phase.StartedAt, phase.EffectiveEnd(now)))))
-			.OrderBy(row => row.Phase.Number)
-			.ThenByDescending(row => row.Dps)
+				player.Dps(currentPhase.DurationSeconds(now)),
+				player.ActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now))))
+			.OrderByDescending(row => row.Dps)
 			.ThenBy(row => row.Player.PlayerName, StringComparer.CurrentCulture)
 			.ToList();
 
-		DrawMetrics(phases, rows, now);
+		DrawMetrics(currentPhase, rows, now);
 		ImGui.Spacing();
 		if (!ImGui.BeginTable("##PartyOverlayTable", 10, TableFlags, new Vector2(0f, -1f)))
 		{
@@ -119,15 +118,15 @@ public sealed class PartyOverlayWindow : Window
 		ProgressColumn(9, row.ActiveRate, 1.0, Percent(row.ActiveRate), new Vector4(0.06f, 0.72f, 0.68f, 0.9f));
 	}
 
-	private static void DrawMetrics(IReadOnlyList<PhaseRecord> phases, IReadOnlyList<OverlayRow> rows, DateTime now)
+	private static void DrawMetrics(PhaseRecord currentPhase, IReadOnlyList<OverlayRow> rows, DateTime now)
 	{
 		long totalDamage = rows.Sum(row => row.Player.TotalDamage);
 		OverlayRow? top = rows.OrderByDescending(row => row.Dps).FirstOrDefault();
-		DateTime startedAt = phases.Min(phase => phase.StartedAt);
-		DateTime endedAt = phases.Max(phase => phase.EffectiveEnd(now));
+		DateTime startedAt = currentPhase.StartedAt;
+		DateTime endedAt = currentPhase.EffectiveEnd(now);
 		(string Label, string Value, Vector4 Color)[] cards =
 		[
-			("PHASE", phases.Count.ToString("N0"), new Vector4(0.3f, 0.72f, 1f, 1f)),
+			("PHASE", currentPhase.Number.ToString("N0"), new Vector4(0.3f, 0.72f, 1f, 1f)),
 			("計測時間", FormatDuration(endedAt - startedAt), new Vector4(0.25f, 0.82f, 0.92f, 1f)),
 			("総ダメージ", totalDamage.ToString("N0"), new Vector4(0.25f, 0.72f, 1f, 1f)),
 			("最高DPS", top == null ? "-" : $"{top.Dps:N1}  {top.Player.PlayerName}", new Vector4(0.45f, 0.86f, 1f, 1f))

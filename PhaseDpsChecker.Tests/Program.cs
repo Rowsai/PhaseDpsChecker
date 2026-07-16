@@ -198,7 +198,11 @@ static void FuturesRewrittenPhaseTransitions()
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnDialogue("エクスデスは「メテオ」を中断した。"), "phase 3 end");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4), controller.OnFirstPartyAttack(), "phase 4 first attack start");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 4), controller.OnDokiDokiUltimaCompleted(), "phase 4 end");
-	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5), controller.OnFirstPartyAttack(), "phase 5 first attack start");
+	Equal(DedicatedPhaseTransition.None, controller.OnFirstPartyAttack(), "ignore party attack before phase 5 dialogue");
+	Equal(DedicatedPhaseTransition.None, controller.OnKefkaTargetable(), "ignore targetable Kefka before phase 5 dialogue");
+	Equal(DedicatedPhaseTransition.None, controller.OnDialogue("ケフカ：私は破壊し続けよう！"), "phase 5 dialogue arms targetability detection");
+	Equal(DedicatedPhaseTransition.None, controller.OnFirstPartyAttack(), "ignore party attack before Kefka becomes targetable");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5), controller.OnKefkaTargetable(), "phase 5 Kefka targetable start");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 5), controller.OnDutyCompleted(), "phase 5 end");
 }
 

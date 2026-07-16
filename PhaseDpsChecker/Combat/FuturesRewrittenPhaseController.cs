@@ -12,7 +12,8 @@ public enum FuturesRewrittenStage
 	Phase3,
 	WaitingForPhase4,
 	Phase4,
-	WaitingForPhase5,
+	WaitingForPhase5Dialogue,
+	WaitingForPhase5Targetable,
 	Phase5,
 	Completed,
 }
@@ -35,6 +36,7 @@ public sealed class FuturesRewrittenPhaseController
 	private const string Phase2StartDialogue = "絶ッ！！再現したな、この私を……！";
 	private const string Phase3StartDialogue = "ボクチンに不可能はなーい！";
 	private const string Phase3EndBattleLog = "エクスデスは「メテオ」を中断した。";
+	private const string Phase5StartDialogue = "私は破壊し続けよう！";
 
 	private bool phase2SawEnemy;
 
@@ -50,7 +52,8 @@ public sealed class FuturesRewrittenPhaseController
 		FuturesRewrittenStage.Phase3 => "Phase 3 計測中",
 		FuturesRewrittenStage.WaitingForPhase4 => "Phase 4 初回攻撃待ち",
 		FuturesRewrittenStage.Phase4 => "Phase 4 計測中",
-		FuturesRewrittenStage.WaitingForPhase5 => "Phase 5 初回攻撃待ち",
+		FuturesRewrittenStage.WaitingForPhase5Dialogue => "Phase 5 開始台詞待ち",
+		FuturesRewrittenStage.WaitingForPhase5Targetable => "Phase 5 ケフカ出現待ち",
 		FuturesRewrittenStage.Phase5 => "Phase 5 計測中",
 		_ => "計測完了",
 	};
@@ -86,12 +89,6 @@ public sealed class FuturesRewrittenPhaseController
 			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4);
 		}
 
-		if (Stage == FuturesRewrittenStage.WaitingForPhase5)
-		{
-			Stage = FuturesRewrittenStage.Phase5;
-			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5);
-		}
-
 		return DedicatedPhaseTransition.None;
 	}
 
@@ -123,7 +120,23 @@ public sealed class FuturesRewrittenPhaseController
 			return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3);
 		}
 
+		if (Stage == FuturesRewrittenStage.WaitingForPhase5Dialogue && normalized.Contains(Normalize(Phase5StartDialogue), StringComparison.Ordinal))
+		{
+			Stage = FuturesRewrittenStage.WaitingForPhase5Targetable;
+		}
+
 		return DedicatedPhaseTransition.None;
+	}
+
+	public DedicatedPhaseTransition OnKefkaTargetable()
+	{
+		if (Stage != FuturesRewrittenStage.WaitingForPhase5Targetable)
+		{
+			return DedicatedPhaseTransition.None;
+		}
+
+		Stage = FuturesRewrittenStage.Phase5;
+		return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5);
 	}
 
 	public DedicatedPhaseTransition OnEnemyListState(bool isEmpty)
@@ -155,7 +168,7 @@ public sealed class FuturesRewrittenPhaseController
 			return DedicatedPhaseTransition.None;
 		}
 
-		Stage = FuturesRewrittenStage.WaitingForPhase5;
+		Stage = FuturesRewrittenStage.WaitingForPhase5Dialogue;
 		return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 4);
 	}
 

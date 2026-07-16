@@ -529,11 +529,34 @@ public sealed class CombatTracker : IDisposable
 		{
 			ApplyDedicatedTransition(futuresRewrittenController.OnEnemyListState(enemyListIsEmpty), now, members);
 		}
+
+		if (futuresRewrittenController.Stage == FuturesRewrittenStage.WaitingForPhase5Targetable)
+		{
+			uint kefkaEntityId = FindTargetableEnemy("ケフカ");
+			if (kefkaEntityId != 0)
+			{
+				ApplyDedicatedTransition(futuresRewrittenController.OnKefkaTargetable(), now, members, kefkaEntityId);
+			}
+		}
 	}
 
 	private bool IsNamedEnemy(uint entityId, string expectedName) =>
 		objectTable.SearchByEntityId(entityId) is ICharacter character &&
 		string.Equals(character.Name.TextValue, expectedName, StringComparison.Ordinal);
+
+	private uint FindTargetableEnemy(string expectedName)
+	{
+		foreach (IGameObject gameObject in objectTable)
+		{
+			if (gameObject != null && gameObject.IsTargetable &&
+				string.Equals(gameObject.Name.TextValue, expectedName, StringComparison.Ordinal))
+			{
+				return gameObject.EntityId;
+			}
+		}
+
+		return 0;
+	}
 
 	private void ApplyDedicatedTransition(DedicatedPhaseTransition transition, DateTime timestamp, IReadOnlyDictionary<uint, string> members, uint anchorEntityId = 0)
 	{
@@ -545,7 +568,7 @@ public sealed class CombatTracker : IDisposable
 		if (transition.Command == DedicatedPhaseCommand.End)
 		{
 			EndPhase(timestamp);
-			if (transition.PhaseNumber is 3 or 4)
+			if (transition.PhaseNumber == 3)
 			{
 				nextDedicatedPhaseAttackAfter = timestamp;
 			}
@@ -558,7 +581,7 @@ public sealed class CombatTracker : IDisposable
 			EndPhase(timestamp);
 		}
 		BeginPhase(timestamp, members, anchorEntityId);
-		if (transition.PhaseNumber is 4 or 5)
+		if (transition.PhaseNumber == 4)
 		{
 			nextDedicatedPhaseAttackAfter = null;
 		}
