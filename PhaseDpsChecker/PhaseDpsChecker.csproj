@@ -1,0 +1,14 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.2.1</Version>
+    <AssemblyName>PhaseDpsChecker</AssemblyName>
+    <RootNamespace>PhaseDpsChecker</RootNamespace>
+    <Authors>Rowsai</Authors>
+    <PackageProjectUrl>https://github.com/Rowsai/PhaseDpsChecker</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Rowsai/PhaseDpsChecker.git</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IsPackable>false</IsPackable>
+    <Nullable>annotations</Nullable>
+    <NoWarn>$(NoWarn);CS8632</NoWarn>
+  </PropertyGroup>
+</Project>

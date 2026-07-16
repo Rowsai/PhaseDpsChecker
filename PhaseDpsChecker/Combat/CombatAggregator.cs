@@ -1,0 +1,133 @@
+using System;
+using System.Collections.Generic;
+
+namespace PhaseDpsChecker.Combat;
+
+public sealed class CombatAggregator
+{
+	private readonly List<PhaseRecord> phases = new List<PhaseRecord>();
+
+	private readonly List<CombatHistoryRecord> histories = new List<CombatHistoryRecord>();
+
+	private int nextPhaseNumber = 1;
+
+	private int nextHistoryNumber = 1;
+
+	public IReadOnlyList<PhaseRecord> Phases => phases;
+
+	public IReadOnlyList<CombatHistoryRecord> Histories => histories;
+
+	public PhaseRecord? CurrentPhase
+	{
+		get
+		{
+			if (phases.Count > 0)
+			{
+				List<PhaseRecord> list = phases;
+				if (list[list.Count - 1].IsActive)
+				{
+					List<PhaseRecord> list2 = phases;
+					return list2[list2.Count - 1];
+				}
+			}
+			return null;
+		}
+	}
+
+	public PhaseRecord BeginPhase(DateTime timestamp, IReadOnlyDictionary<uint, string> partyMembers, uint anchorTargetId)
+	{
+		if (CurrentPhase != null)
+		{
+			return CurrentPhase;
+		}
+		PhaseRecord phaseRecord = new PhaseRecord(nextPhaseNumber++, timestamp, anchorTargetId);
+		foreach (KeyValuePair<uint, string> partyMember in partyMembers)
+		{
+			phaseRecord.EnsurePlayer(partyMember.Key, partyMember.Value);
+		}
+		phases.Add(phaseRecord);
+		return phaseRecord;
+	}
+
+	public void RecordAction(CombatActionEvent actionEvent, IReadOnlySet<uint> currentPartyEntityIds)
+	{
+		PhaseRecord currentPhase = CurrentPhase;
+		if (currentPhase == null || !currentPartyEntityIds.Contains(actionEvent.SourceEntityId))
+		{
+			return;
+		}
+		PlayerPhaseStatistics playerPhaseStatistics = currentPhase.EnsurePlayer(actionEvent.SourceEntityId, actionEvent.PlayerName);
+		ActionStatistics action = playerPhaseStatistics.GetAction(actionEvent.ActionId, actionEvent.ActionName, actionEvent.Kind, actionEvent.CountsAsUse);
+		if (actionEvent.IsGcd)
+		{
+			playerPhaseStatistics.AddGcdInterval(actionEvent.Timestamp, actionEvent.GcdDurationSeconds);
+		}
+		foreach (EffectSample effect in actionEvent.Effects)
+		{
+			bool flag = currentPartyEntityIds.Contains(effect.TargetEntityId);
+			if (effect.Damage != 0 && !flag)
+			{
+				playerPhaseStatistics.AddDamage(actionEvent.ActionName, action, effect);
+			}
+			if (effect.Healing != 0 && flag)
+			{
+				playerPhaseStatistics.AddHealing(action, effect);
+			}
+		}
+	}
+
+	public bool EndCurrentPhase(DateTime timestamp)
+	{
+		PhaseRecord currentPhase = CurrentPhase;
+		if (currentPhase == null)
+		{
+			return false;
+		}
+		currentPhase.EndedAt = ((timestamp < currentPhase.StartedAt) ? currentPhase.StartedAt : timestamp);
+		return true;
+	}
+
+	public CombatHistoryRecord? ArchiveCurrent(DateTime timestamp, CombatHistoryEndReason endReason)
+	{
+		EndCurrentPhase(timestamp);
+		if (phases.Count == 0)
+		{
+			return null;
+		}
+		CombatHistoryRecord combatHistoryRecord = new CombatHistoryRecord(nextHistoryNumber++, timestamp, endReason, phases.ToArray());
+		histories.Add(combatHistoryRecord);
+		phases.Clear();
+		nextPhaseNumber = 1;
+		return combatHistoryRecord;
+	}
+
+	public void TrimCurrentPhases(int maximumPhases)
+	{
+		maximumPhases = Math.Max(1, maximumPhases);
+		while (phases.Count > maximumPhases && !phases[0].IsActive)
+		{
+			phases.RemoveAt(0);
+		}
+	}
+
+	public void TrimArchivedHistory(int maximumEncounters)
+	{
+		maximumEncounters = Math.Max(1, maximumEncounters);
+		while (histories.Count > maximumEncounters)
+		{
+			histories.RemoveAt(0);
+		}
+	}
+
+	public void ClearCurrent()
+	{
+		phases.Clear();
+		nextPhaseNumber = 1;
+	}
+
+	public void ClearArchivedHistory()
+	{
+		histories.Clear();
+		nextHistoryNumber = 1;
+	}
+}

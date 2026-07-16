@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>annotations</Nullable>
+    <NoWarn>$(NoWarn);CS8632</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\PhaseDpsChecker\Combat\ActionKind.cs" Link="Combat\ActionKind.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\CombatActionEvent.cs" Link="Combat\CombatActionEvent.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\ActionStatistics.cs" Link="Combat\ActionStatistics.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\PlayerPhaseStatistics.cs" Link="Combat\PlayerPhaseStatistics.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\PhaseRecord.cs" Link="Combat\PhaseRecord.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\CombatHistoryEndReason.cs" Link="Combat\CombatHistoryEndReason.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\CombatHistoryRecord.cs" Link="Combat\CombatHistoryRecord.cs" />
+    <Compile Include="..\PhaseDpsChecker\Combat\CombatAggregator.cs" Link="Combat\CombatAggregator.cs" />
+  </ItemGroup>
+</Project>

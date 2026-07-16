@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="PhaseDpsChecker/PhaseDpsChecker.csproj" />
+  <Project Path="PhaseDpsChecker.Tests/PhaseDpsChecker.Tests.csproj" />
+</Solution>
