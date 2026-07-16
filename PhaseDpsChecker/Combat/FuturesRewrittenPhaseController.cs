@@ -40,6 +40,8 @@ public sealed class FuturesRewrittenPhaseController
 
 	private bool phase2SawEnemy;
 
+	private int phase4DokiDokiUltimaCompletions;
+
 	public FuturesRewrittenStage Stage { get; private set; } = FuturesRewrittenStage.WaitingForPhase1;
 
 	public string StatusLabel => Stage switch
@@ -51,7 +53,7 @@ public sealed class FuturesRewrittenPhaseController
 		FuturesRewrittenStage.WaitingForPhase3 => "Phase 3 開始台詞待ち",
 		FuturesRewrittenStage.Phase3 => "Phase 3 計測中",
 		FuturesRewrittenStage.WaitingForPhase4 => "Phase 4 初回攻撃待ち",
-		FuturesRewrittenStage.Phase4 => "Phase 4 計測中",
+		FuturesRewrittenStage.Phase4 => $"Phase 4 計測中（どきどきアルテマ {phase4DokiDokiUltimaCompletions}/2）",
 		FuturesRewrittenStage.WaitingForPhase5Dialogue => "Phase 5 開始台詞待ち",
 		FuturesRewrittenStage.WaitingForPhase5Targetable => "Phase 5 ケフカ出現待ち",
 		FuturesRewrittenStage.Phase5 => "Phase 5 計測中",
@@ -62,6 +64,7 @@ public sealed class FuturesRewrittenPhaseController
 	{
 		Stage = FuturesRewrittenStage.WaitingForPhase1;
 		phase2SawEnemy = false;
+		phase4DokiDokiUltimaCompletions = 0;
 	}
 
 	public DedicatedPhaseTransition OnCombatStarted()
@@ -86,6 +89,7 @@ public sealed class FuturesRewrittenPhaseController
 		if (Stage == FuturesRewrittenStage.WaitingForPhase4)
 		{
 			Stage = FuturesRewrittenStage.Phase4;
+			phase4DokiDokiUltimaCompletions = 0;
 			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4);
 		}
 
@@ -164,6 +168,12 @@ public sealed class FuturesRewrittenPhaseController
 	public DedicatedPhaseTransition OnDokiDokiUltimaCompleted()
 	{
 		if (Stage != FuturesRewrittenStage.Phase4)
+		{
+			return DedicatedPhaseTransition.None;
+		}
+
+		phase4DokiDokiUltimaCompletions++;
+		if (phase4DokiDokiUltimaCompletions < 2)
 		{
 			return DedicatedPhaseTransition.None;
 		}
