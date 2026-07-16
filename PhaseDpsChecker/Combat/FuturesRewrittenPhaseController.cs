@@ -12,7 +12,6 @@ public enum FuturesRewrittenStage
 	Phase3,
 	WaitingForPhase4,
 	Phase4,
-	WaitingForKefkaDeparture,
 	WaitingForPhase5,
 	Phase5,
 	Completed,
@@ -35,10 +34,9 @@ public sealed class FuturesRewrittenPhaseController
 	private const string Phase1EndDialogue = "お前たち、「初めて」じゃないな？ナルホド……さては……";
 	private const string Phase2StartDialogue = "絶ッ！！再現したな、この私を……！";
 	private const string Phase3StartDialogue = "ボクチンに不可能はなーい！";
+	private const string Phase3EndBattleLog = "エクスデスは「メテオ」を中断した。";
 
 	private bool phase2SawEnemy;
-
-	private bool phase3SawChaosOrExdeath;
 
 	public FuturesRewrittenStage Stage { get; private set; } = FuturesRewrittenStage.WaitingForPhase1;
 
@@ -50,10 +48,9 @@ public sealed class FuturesRewrittenPhaseController
 		FuturesRewrittenStage.Phase2 => "Phase 2 計測中",
 		FuturesRewrittenStage.WaitingForPhase3 => "Phase 3 開始台詞待ち",
 		FuturesRewrittenStage.Phase3 => "Phase 3 計測中",
-		FuturesRewrittenStage.WaitingForPhase4 => "Phase 4 ケフカ出現待ち",
+		FuturesRewrittenStage.WaitingForPhase4 => "Phase 4 初回攻撃待ち",
 		FuturesRewrittenStage.Phase4 => "Phase 4 計測中",
-		FuturesRewrittenStage.WaitingForKefkaDeparture => "Phase 4 終了後の退場待ち",
-		FuturesRewrittenStage.WaitingForPhase5 => "Phase 5 ケフカ出現待ち",
+		FuturesRewrittenStage.WaitingForPhase5 => "Phase 5 初回攻撃待ち",
 		FuturesRewrittenStage.Phase5 => "Phase 5 計測中",
 		_ => "計測完了",
 	};
@@ -62,7 +59,6 @@ public sealed class FuturesRewrittenPhaseController
 	{
 		Stage = FuturesRewrittenStage.WaitingForPhase1;
 		phase2SawEnemy = false;
-		phase3SawChaosOrExdeath = false;
 	}
 
 	public DedicatedPhaseTransition OnCombatStarted()
@@ -74,6 +70,29 @@ public sealed class FuturesRewrittenPhaseController
 
 		Stage = FuturesRewrittenStage.Phase1;
 		return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 1);
+	}
+
+	public DedicatedPhaseTransition OnFirstPartyAttack()
+	{
+		if (Stage == FuturesRewrittenStage.WaitingForPhase1)
+		{
+			Stage = FuturesRewrittenStage.Phase1;
+			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 1);
+		}
+
+		if (Stage == FuturesRewrittenStage.WaitingForPhase4)
+		{
+			Stage = FuturesRewrittenStage.Phase4;
+			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4);
+		}
+
+		if (Stage == FuturesRewrittenStage.WaitingForPhase5)
+		{
+			Stage = FuturesRewrittenStage.Phase5;
+			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5);
+		}
+
+		return DedicatedPhaseTransition.None;
 	}
 
 	public DedicatedPhaseTransition OnDialogue(string message)
@@ -95,8 +114,13 @@ public sealed class FuturesRewrittenPhaseController
 		if (Stage == FuturesRewrittenStage.WaitingForPhase3 && normalized.Contains(Normalize(Phase3StartDialogue), StringComparison.Ordinal))
 		{
 			Stage = FuturesRewrittenStage.Phase3;
-			phase3SawChaosOrExdeath = false;
 			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 3);
+		}
+
+		if (Stage == FuturesRewrittenStage.Phase3 && normalized.Contains(Normalize(Phase3EndBattleLog), StringComparison.Ordinal))
+		{
+			Stage = FuturesRewrittenStage.WaitingForPhase4;
+			return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3);
 		}
 
 		return DedicatedPhaseTransition.None;
@@ -124,51 +148,6 @@ public sealed class FuturesRewrittenPhaseController
 		return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 2);
 	}
 
-	public DedicatedPhaseTransition OnPhase3EnemyListState(bool containsChaosOrExdeath)
-	{
-		if (Stage != FuturesRewrittenStage.Phase3)
-		{
-			return DedicatedPhaseTransition.None;
-		}
-
-		if (containsChaosOrExdeath)
-		{
-			phase3SawChaosOrExdeath = true;
-			return DedicatedPhaseTransition.None;
-		}
-
-		if (!phase3SawChaosOrExdeath)
-		{
-			return DedicatedPhaseTransition.None;
-		}
-
-		Stage = FuturesRewrittenStage.WaitingForPhase4;
-		return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3);
-	}
-
-	public DedicatedPhaseTransition OnKefkaTargetability(bool isTargetable)
-	{
-		if (Stage == FuturesRewrittenStage.WaitingForPhase4 && isTargetable)
-		{
-			Stage = FuturesRewrittenStage.Phase4;
-			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4);
-		}
-
-		if (Stage == FuturesRewrittenStage.WaitingForKefkaDeparture && !isTargetable)
-		{
-			Stage = FuturesRewrittenStage.WaitingForPhase5;
-			return DedicatedPhaseTransition.None;
-		}
-
-		if (Stage == FuturesRewrittenStage.WaitingForPhase5 && isTargetable)
-		{
-			Stage = FuturesRewrittenStage.Phase5;
-			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5);
-		}
-
-		return DedicatedPhaseTransition.None;
-	}
-
 	public DedicatedPhaseTransition OnDokiDokiUltimaCompleted()
 	{
 		if (Stage != FuturesRewrittenStage.Phase4)
@@ -176,7 +155,7 @@ public sealed class FuturesRewrittenPhaseController
 			return DedicatedPhaseTransition.None;
 		}
 
-		Stage = FuturesRewrittenStage.WaitingForKefkaDeparture;
+		Stage = FuturesRewrittenStage.WaitingForPhase5;
 		return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 4);
 	}
 

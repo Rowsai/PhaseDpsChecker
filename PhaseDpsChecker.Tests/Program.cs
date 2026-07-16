@@ -12,7 +12,7 @@ var tests = new (string Name, Action Run)[]
 	("撃破したアンカーへの最終攻撃を判定", DefeatingAnchorHit),
 	("絶妖星乱舞の専用フェーズ遷移", FuturesRewrittenPhaseTransitions),
 	("絶妖星乱舞 Phase 2 は敵視リスト消失で終了", FuturesRewrittenEnemyListTransition),
-	("絶妖星乱舞 Phase 3 は対象エネミーの敵視リスト消失で終了", FuturesRewrittenPhase3EnemyListTransition),
+	("絶妖星乱舞 Phase 3 はメテオ中断ログで終了", FuturesRewrittenPhase3BattleLogTransition),
 };
 
 foreach (var test in tests)
@@ -195,12 +195,10 @@ static void FuturesRewrittenPhaseTransitions()
 	controller.OnEnemyListState(isEmpty: false);
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 2), controller.OnEnemyListState(isEmpty: true), "phase 2 end");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 3), controller.OnDialogue("ボクチンに不可能はなーい！"), "phase 3 start");
-	Equal(DedicatedPhaseTransition.None, controller.OnPhase3EnemyListState(containsChaosOrExdeath: true), "phase 3 target observed");
-	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnPhase3EnemyListState(containsChaosOrExdeath: false), "phase 3 end");
-	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4), controller.OnKefkaTargetability(isTargetable: true), "phase 4 start");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnDialogue("エクスデスは「メテオ」を中断した。"), "phase 3 end");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4), controller.OnFirstPartyAttack(), "phase 4 first attack start");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 4), controller.OnDokiDokiUltimaCompleted(), "phase 4 end");
-	Equal(DedicatedPhaseTransition.None, controller.OnKefkaTargetability(isTargetable: false), "kefka departure");
-	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5), controller.OnKefkaTargetability(isTargetable: true), "phase 5 start");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5), controller.OnFirstPartyAttack(), "phase 5 first attack start");
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 5), controller.OnDutyCompleted(), "phase 5 end");
 }
 
@@ -215,7 +213,7 @@ static void FuturesRewrittenEnemyListTransition()
 	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 2), controller.OnEnemyListState(isEmpty: true), "end after list becomes empty");
 }
 
-static void FuturesRewrittenPhase3EnemyListTransition()
+static void FuturesRewrittenPhase3BattleLogTransition()
 {
 	var controller = new FuturesRewrittenPhaseController();
 	controller.OnCombatStarted();
@@ -224,9 +222,9 @@ static void FuturesRewrittenPhase3EnemyListTransition()
 	controller.OnEnemyListState(isEmpty: false);
 	controller.OnEnemyListState(isEmpty: true);
 	controller.OnDialogue("ボクチンに不可能はなーい！");
-	Equal(DedicatedPhaseTransition.None, controller.OnPhase3EnemyListState(containsChaosOrExdeath: false), "ignore an initially missing target");
-	Equal(DedicatedPhaseTransition.None, controller.OnPhase3EnemyListState(containsChaosOrExdeath: true), "observe Chaos or Exdeath");
-	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnPhase3EnemyListState(containsChaosOrExdeath: false), "end after both targets disappear");
+	Equal(DedicatedPhaseTransition.None, controller.OnDialogue("エクスデスは「メテオ」を実行した。"), "ignore a different battle log");
+	Equal(DedicatedPhaseTransition.None, controller.OnFirstPartyAttack(), "ignore party attack during phase 3");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnDialogue("バトルログ：エクスデスは「メテオ」を中断した。"), "end on the meteor interruption log");
 }
 
 static CombatActionEvent Event(DateTime timestamp, uint source, uint actionId, string actionName, EffectSample effect, bool gcd = false, double gcdSeconds = 2.5) =>

@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.4.1</Version>
+    <Version>0.4.2</Version>
     <AssemblyName>PhaseDpsChecker</AssemblyName>
     <RootNamespace>PhaseDpsChecker</RootNamespace>
     <Authors>Rowsai</Authors>

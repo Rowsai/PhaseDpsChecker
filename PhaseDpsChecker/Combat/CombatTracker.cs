@@ -41,8 +41,6 @@ public sealed class CombatTracker : IDisposable
 
 	private readonly ConcurrentQueue<(DateTime Timestamp, string Message)> dialogueEvents = new();
 
-	private static readonly string[] Phase3EnemyNames = ["カオス", "エクスデス"];
-
 	private readonly Dictionary<PeriodicKey, PeriodicAttribution> periodicAttributions = new Dictionary<PeriodicKey, PeriodicAttribution>();
 
 	private uint anchorTargetEntityId;
@@ -52,6 +50,8 @@ public sealed class CombatTracker : IDisposable
 	private DateTime? combatLostAt;
 
 	private DateTime? lastPartyDamageAt;
+
+	private DateTime? nextDedicatedPhaseAttackAfter;
 
 	private bool dutyCompletionPending;
 
@@ -218,6 +218,7 @@ public sealed class CombatTracker : IDisposable
 		string playerName = string.Empty;
 		bool isPartySource = partyOwnerId != 0 && members.TryGetValue(partyOwnerId, out playerName);
 		bool hasOutgoingDamage = isPartySource && rawAction.Effects.Any((EffectSample effect) => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId));
+		bool hasDirectPartyMemberOutgoingDamage = memberIds.Contains(rawAction.SourceEntityId) && hasOutgoingDamage;
 		List<IGrouping<uint, EffectSample>> incomingGroups = (from effect in rawAction.Effects
 			where effect.Damage != 0 && memberIds.Contains(effect.TargetEntityId) && !isPartySource
 			group effect by effect.TargetEntityId).ToList();
@@ -231,12 +232,12 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (Aggregator.CurrentPhase == null)
 		{
-			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && hasOutgoingDamage)
+			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && hasDirectPartyMemberOutgoingDamage)
 			{
 				uint firstTarget = ChooseTargetableAnchor(rawAction.Effects, memberIds);
-				if (firstTarget != 0)
+				if (firstTarget != 0 && (!nextDedicatedPhaseAttackAfter.HasValue || rawAction.Timestamp >= nextDedicatedPhaseAttackAfter.Value))
 				{
-					ApplyDedicatedTransition(futuresRewrittenController.OnCombatStarted(), rawAction.Timestamp, members, firstTarget);
+					ApplyDedicatedTransition(futuresRewrittenController.OnFirstPartyAttack(), rawAction.Timestamp, members, firstTarget);
 				}
 			}
 			else if (ActivePreset == PhaseDetectionPreset.Normal && hasOutgoingDamage)
@@ -528,36 +529,11 @@ public sealed class CombatTracker : IDisposable
 		{
 			ApplyDedicatedTransition(futuresRewrittenController.OnEnemyListState(enemyListIsEmpty), now, members);
 		}
-		if (futuresRewrittenController.Stage == FuturesRewrittenStage.Phase3 &&
-			EnemyListReader.TryContainsAny(out bool containsChaosOrExdeath, Phase3EnemyNames))
-		{
-			ApplyDedicatedTransition(futuresRewrittenController.OnPhase3EnemyListState(containsChaosOrExdeath), now, members);
-		}
-
-		bool kefkaTargetable = objectTable.Any(gameObject =>
-			gameObject != null && gameObject.IsTargetable &&
-			string.Equals(gameObject.Name.TextValue, "ケフカ", StringComparison.Ordinal));
-		ApplyDedicatedTransition(futuresRewrittenController.OnKefkaTargetability(kefkaTargetable), now, members,
-			kefkaTargetable ? FindTargetableEnemy("ケフカ") : 0);
-
 	}
 
 	private bool IsNamedEnemy(uint entityId, string expectedName) =>
 		objectTable.SearchByEntityId(entityId) is ICharacter character &&
 		string.Equals(character.Name.TextValue, expectedName, StringComparison.Ordinal);
-
-	private uint FindTargetableEnemy(string expectedName)
-	{
-		foreach (IGameObject gameObject in objectTable)
-		{
-			if (gameObject != null && gameObject.IsTargetable && string.Equals(gameObject.Name.TextValue, expectedName, StringComparison.Ordinal))
-			{
-				return gameObject.EntityId;
-			}
-		}
-
-		return 0;
-	}
 
 	private void ApplyDedicatedTransition(DedicatedPhaseTransition transition, DateTime timestamp, IReadOnlyDictionary<uint, string> members, uint anchorEntityId = 0)
 	{
@@ -569,6 +545,10 @@ public sealed class CombatTracker : IDisposable
 		if (transition.Command == DedicatedPhaseCommand.End)
 		{
 			EndPhase(timestamp);
+			if (transition.PhaseNumber is 3 or 4)
+			{
+				nextDedicatedPhaseAttackAfter = timestamp;
+			}
 			log.Information("絶妖星乱舞 Phase {PhaseNumber} の計測を終了しました。", transition.PhaseNumber);
 			return;
 		}
@@ -578,6 +558,10 @@ public sealed class CombatTracker : IDisposable
 			EndPhase(timestamp);
 		}
 		BeginPhase(timestamp, members, anchorEntityId);
+		if (transition.PhaseNumber is 4 or 5)
+		{
+			nextDedicatedPhaseAttackAfter = null;
+		}
 		log.Information("絶妖星乱舞 Phase {PhaseNumber} の計測を開始しました。", transition.PhaseNumber);
 	}
 
@@ -698,6 +682,7 @@ public sealed class CombatTracker : IDisposable
 		ResetPhaseDetection();
 		futuresRewrittenController.Reset();
 		lastPartyDamageAt = null;
+		nextDedicatedPhaseAttackAfter = null;
 		dutyCompletionPending = false;
 		while (dialogueEvents.TryDequeue(out _))
 		{
