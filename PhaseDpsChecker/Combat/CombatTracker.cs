@@ -41,7 +41,7 @@ public sealed class CombatTracker : IDisposable
 
 	private readonly ConcurrentQueue<(DateTime Timestamp, string Message)> dialogueEvents = new();
 
-	private readonly Dictionary<uint, DateTime> recentDedicatedBossHits = new();
+	private static readonly string[] Phase3EnemyNames = ["カオス", "エクスデス"];
 
 	private readonly Dictionary<PeriodicKey, PeriodicAttribution> periodicAttributions = new Dictionary<PeriodicKey, PeriodicAttribution>();
 
@@ -286,10 +286,6 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 		{
-			if (hasOutgoingDamage)
-			{
-				TrackDedicatedBossHits(rawAction.Timestamp, rawAction.Effects, members);
-			}
 			if (futuresRewrittenController.Stage == FuturesRewrittenStage.Phase4 &&
 				IsNamedEnemy(rawAction.SourceEntityId, "ケフカ") &&
 				string.Equals(actionName, "どきどきアルテマ", StringComparison.Ordinal))
@@ -372,7 +368,6 @@ public sealed class CombatTracker : IDisposable
 			{
 				lastPartyDamageAt = periodicEvent.Timestamp;
 			}
-			TrackDedicatedBossHits(periodicEvent.Timestamp, [item], members);
 		}
 		else
 		{
@@ -533,6 +528,11 @@ public sealed class CombatTracker : IDisposable
 		{
 			ApplyDedicatedTransition(futuresRewrittenController.OnEnemyListState(enemyListIsEmpty), now, members);
 		}
+		if (futuresRewrittenController.Stage == FuturesRewrittenStage.Phase3 &&
+			EnemyListReader.TryContainsAny(out bool containsChaosOrExdeath, Phase3EnemyNames))
+		{
+			ApplyDedicatedTransition(futuresRewrittenController.OnPhase3EnemyListState(containsChaosOrExdeath), now, members);
+		}
 
 		bool kefkaTargetable = objectTable.Any(gameObject =>
 			gameObject != null && gameObject.IsTargetable &&
@@ -540,45 +540,6 @@ public sealed class CombatTracker : IDisposable
 		ApplyDedicatedTransition(futuresRewrittenController.OnKefkaTargetability(kefkaTargetable), now, members,
 			kefkaTargetable ? FindTargetableEnemy("ケフカ") : 0);
 
-		if (futuresRewrittenController.Stage != FuturesRewrittenStage.Phase3 || recentDedicatedBossHits.Count == 0)
-		{
-			return;
-		}
-
-		foreach (KeyValuePair<uint, DateTime> hit in recentDedicatedBossHits.OrderByDescending(entry => entry.Value).ToArray())
-		{
-			if (objectTable.SearchByEntityId(hit.Key) is not ICharacter character || (!character.IsDead && character.CurrentHp != 0))
-			{
-				continue;
-			}
-
-			string enemyName = character.Name.TextValue;
-			ApplyDedicatedTransition(futuresRewrittenController.OnBossDefeated(enemyName), hit.Value, members);
-			break;
-		}
-	}
-
-	private void TrackDedicatedBossHits(DateTime timestamp, IReadOnlyList<EffectSample> effects, IReadOnlyDictionary<uint, string> members)
-	{
-		if (futuresRewrittenController.Stage != FuturesRewrittenStage.Phase3)
-		{
-			return;
-		}
-
-		foreach (EffectSample effect in effects.Where(effect => effect.Damage != 0))
-		{
-			if (!IsNamedEnemy(effect.TargetEntityId, "カオス") && !IsNamedEnemy(effect.TargetEntityId, "エクスデス"))
-			{
-				continue;
-			}
-
-			recentDedicatedBossHits[effect.TargetEntityId] = timestamp;
-			if (objectTable.SearchByEntityId(effect.TargetEntityId) is ICharacter character && (character.IsDead || character.CurrentHp == 0))
-			{
-				ApplyDedicatedTransition(futuresRewrittenController.OnBossDefeated(character.Name.TextValue), timestamp, members);
-				return;
-			}
-		}
 	}
 
 	private bool IsNamedEnemy(uint entityId, string expectedName) =>
@@ -736,7 +697,6 @@ public sealed class CombatTracker : IDisposable
 	{
 		ResetPhaseDetection();
 		futuresRewrittenController.Reset();
-		recentDedicatedBossHits.Clear();
 		lastPartyDamageAt = null;
 		dutyCompletionPending = false;
 		while (dialogueEvents.TryDequeue(out _))

@@ -38,6 +38,8 @@ public sealed class FuturesRewrittenPhaseController
 
 	private bool phase2SawEnemy;
 
+	private bool phase3SawChaosOrExdeath;
+
 	public FuturesRewrittenStage Stage { get; private set; } = FuturesRewrittenStage.WaitingForPhase1;
 
 	public string StatusLabel => Stage switch
@@ -60,6 +62,7 @@ public sealed class FuturesRewrittenPhaseController
 	{
 		Stage = FuturesRewrittenStage.WaitingForPhase1;
 		phase2SawEnemy = false;
+		phase3SawChaosOrExdeath = false;
 	}
 
 	public DedicatedPhaseTransition OnCombatStarted()
@@ -92,6 +95,7 @@ public sealed class FuturesRewrittenPhaseController
 		if (Stage == FuturesRewrittenStage.WaitingForPhase3 && normalized.Contains(Normalize(Phase3StartDialogue), StringComparison.Ordinal))
 		{
 			Stage = FuturesRewrittenStage.Phase3;
+			phase3SawChaosOrExdeath = false;
 			return new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 3);
 		}
 
@@ -120,9 +124,20 @@ public sealed class FuturesRewrittenPhaseController
 		return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 2);
 	}
 
-	public DedicatedPhaseTransition OnBossDefeated(string enemyName)
+	public DedicatedPhaseTransition OnPhase3EnemyListState(bool containsChaosOrExdeath)
 	{
-		if (Stage != FuturesRewrittenStage.Phase3 || (!NameEquals(enemyName, "カオス") && !NameEquals(enemyName, "エクスデス")))
+		if (Stage != FuturesRewrittenStage.Phase3)
+		{
+			return DedicatedPhaseTransition.None;
+		}
+
+		if (containsChaosOrExdeath)
+		{
+			phase3SawChaosOrExdeath = true;
+			return DedicatedPhaseTransition.None;
+		}
+
+		if (!phase3SawChaosOrExdeath)
 		{
 			return DedicatedPhaseTransition.None;
 		}
@@ -175,9 +190,6 @@ public sealed class FuturesRewrittenPhaseController
 		Stage = FuturesRewrittenStage.Completed;
 		return new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 5);
 	}
-
-	private static bool NameEquals(string value, string expected) =>
-		string.Equals(Normalize(value), Normalize(expected), StringComparison.Ordinal);
 
 	private static string Normalize(string value) => value
 		.Replace(" ", string.Empty, StringComparison.Ordinal)
