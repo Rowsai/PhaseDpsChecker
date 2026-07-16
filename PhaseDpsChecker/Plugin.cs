@@ -52,6 +52,9 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	internal static IClientState ClientState { get; private set; }
 
 	[PluginService]
+	internal static IChatGui ChatGui { get; private set; }
+
+	[PluginService]
 	internal static IGameInteropProvider GameInteropProvider { get; private set; }
 
 	[PluginService]
@@ -62,16 +65,16 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	public Plugin()
 	{
 		Configuration = (PluginInterface.GetPluginConfig() as Configuration) ?? new Configuration();
-		if (Configuration.Version < 3)
+		if (Configuration.Version < 4)
 		{
 			if (Configuration.MaxEncounterHistory <= 0)
 			{
 				Configuration.MaxEncounterHistory = 20;
 			}
-			Configuration.Version = 3;
+			Configuration.Version = 4;
 			Configuration.Save();
 		}
-		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, GameInteropProvider, Log);
+		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, ChatGui, GameInteropProvider, Log);
 		partyOverlayWindow = new PartyOverlayWindow(combatTracker);
 		mainWindow = new MainWindow(Configuration, combatTracker);
 		windowSystem.AddWindow(mainWindow);

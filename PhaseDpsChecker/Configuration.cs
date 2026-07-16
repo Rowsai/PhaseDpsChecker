@@ -1,18 +1,19 @@
 using System;
 using Dalamud.Configuration;
+using PhaseDpsChecker.Combat;
 
 namespace PhaseDpsChecker;
 
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 3;
+	public int Version { get; set; } = 4;
 
 	public uint SelectedEntityId { get; set; }
 
 	public bool ShowPartyOverlay { get; set; }
 
-	public float TargetLossGraceSeconds { get; set; } = 0.75f;
+	public PhaseDetectionPreset PhaseDetectionPreset { get; set; } = PhaseDetectionPreset.Normal;
 
 	public int MaxPhaseHistory { get; set; } = 50;
 

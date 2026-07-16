@@ -10,6 +10,8 @@ var tests = new (string Name, Action Run)[]
     ("全滅時の履歴保存と現在表示クリア", ArchiveCombatHistory),
 	("被ダメージとステータスを履歴へ保存", ArchiveIncomingDamage),
 	("撃破したアンカーへの最終攻撃を判定", DefeatingAnchorHit),
+	("絶妖星乱舞の専用フェーズ遷移", FuturesRewrittenPhaseTransitions),
+	("絶妖星乱舞 Phase 2 は敵視リスト消失で終了", FuturesRewrittenEnemyListTransition),
 };
 
 foreach (var test in tests)
@@ -181,6 +183,34 @@ static void DefeatingAnchorHit()
 	}
 	Equal(1801L, aggregator.Phases.Single().Players[1].TotalDamage, "final hit damage included");
 	Equal(finalHitAt, aggregator.Phases.Single().EndedAt, "phase ends at final hit timestamp");
+}
+
+static void FuturesRewrittenPhaseTransitions()
+{
+	var controller = new FuturesRewrittenPhaseController();
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 1), controller.OnCombatStarted(), "phase 1 start");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 1), controller.OnDialogue("ケフカ：お前たち、「初めて」じゃないな？ ナルホド……さては……」"), "phase 1 end");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 2), controller.OnDialogue("絶ッ！！再現したな、この私を……！"), "phase 2 start");
+	controller.OnEnemyListState(isEmpty: false);
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 2), controller.OnEnemyListState(isEmpty: true), "phase 2 end");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 3), controller.OnDialogue("ボクチンに不可能はなーい！"), "phase 3 start");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 3), controller.OnBossDefeated("エクスデス"), "phase 3 end");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 4), controller.OnKefkaTargetability(isTargetable: true), "phase 4 start");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 4), controller.OnDokiDokiUltimaCompleted(), "phase 4 end");
+	Equal(DedicatedPhaseTransition.None, controller.OnKefkaTargetability(isTargetable: false), "kefka departure");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.Start, 5), controller.OnKefkaTargetability(isTargetable: true), "phase 5 start");
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 5), controller.OnDutyCompleted(), "phase 5 end");
+}
+
+static void FuturesRewrittenEnemyListTransition()
+{
+	var controller = new FuturesRewrittenPhaseController();
+	controller.OnCombatStarted();
+	controller.OnDialogue("お前たち、「初めて」じゃないな？ナルホド……さては……");
+	controller.OnDialogue("絶ッ！！再現したな、この私を……！");
+	Equal(DedicatedPhaseTransition.None, controller.OnEnemyListState(isEmpty: true), "ignore an initially empty list");
+	controller.OnEnemyListState(isEmpty: false);
+	Equal(new DedicatedPhaseTransition(DedicatedPhaseCommand.End, 2), controller.OnEnemyListState(isEmpty: true), "end after list becomes empty");
 }
 
 static CombatActionEvent Event(DateTime timestamp, uint source, uint actionId, string actionName, EffectSample effect, bool gcd = false, double gcdSeconds = 2.5) =>

@@ -153,6 +153,39 @@ public sealed class MainWindow : Window, IDisposable
 	{
 		DrawSectionTitle("表示設定", "ライブ表示の対象と計測条件を設定します。");
 		Dictionary<uint, string> currentMembers = tracker.Roster.GetCurrentMembers();
+
+		DrawSectionTitle("専用フェーズ判定", "絶コンテンツ用のフェーズ条件を選択します。未選択時は通常計測です。");
+		ImGui.TextUnformatted("コンテンツ情報");
+		ImGui.SetNextItemWidth(380f);
+		if (ImGui.BeginListBox("##PhaseDetectionPreset", new Vector2(380f, 82f)))
+		{
+			bool normalSelected = configuration.PhaseDetectionPreset == PhaseDetectionPreset.Normal;
+			if (ImGui.Selectable(PhaseDetectionPreset.Normal.DisplayName(), normalSelected))
+			{
+				tracker.SetPhaseDetectionPreset(PhaseDetectionPreset.Normal);
+			}
+			if (normalSelected)
+			{
+				ImGui.SetItemDefaultFocus();
+			}
+
+			foreach (PhaseDetectionPreset preset in PhaseDetectionPresetCatalog.All)
+			{
+				bool selected = configuration.PhaseDetectionPreset == preset;
+				if (ImGui.Selectable(preset.DisplayName(), selected))
+				{
+					tracker.SetPhaseDetectionPreset(preset);
+				}
+				if (selected)
+				{
+					ImGui.SetItemDefaultFocus();
+				}
+			}
+			ImGui.EndListBox();
+		}
+		ImGui.TextColored(new Vector4(0.35f, 0.75f, 1f, 1f), tracker.PhaseDetectionStatus);
+		ImGui.Spacing();
+
 		string selectedLabel = configuration.SelectedEntityId == 0
 			? "パーティメンバー全体"
 			: currentMembers.TryGetValue(configuration.SelectedEntityId, out string? selectedName)
@@ -198,18 +231,6 @@ public sealed class MainWindow : Window, IDisposable
 
 		ImGui.Spacing();
 		DrawSectionTitle("計測", "フェーズ判定とメモリ内履歴の保持数を調整します。");
-		float targetLossGraceSeconds = configuration.TargetLossGraceSeconds;
-		ImGui.SetNextItemWidth(280f);
-		if (ImGui.SliderFloat("ターゲット不可の猶予（秒）", ref targetLossGraceSeconds, 0.1f, 3f, "%.2f"))
-		{
-			configuration.TargetLossGraceSeconds = targetLossGraceSeconds;
-			configuration.Save();
-		}
-		if (ImGui.IsItemHovered())
-		{
-			ImGui.SetTooltip("一時的なオブジェクト更新をフェーズ終了と誤判定しないための猶予です。");
-		}
-
 		int maxPhaseHistory = configuration.MaxPhaseHistory;
 		ImGui.SetNextItemWidth(280f);
 		if (ImGui.SliderInt("1戦闘で保持するフェーズ数", ref maxPhaseHistory, 5, 100))

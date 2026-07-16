@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using Dalamud.Game.Chat;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.DutyState;
@@ -27,11 +29,19 @@ public sealed class CombatTracker : IDisposable
 
 	private readonly IClientState clientState;
 
+	private readonly IChatGui chatGui;
+
 	private readonly IDutyState dutyState;
 
 	private readonly IPluginLog log;
 
 	private readonly ActionEffectCapture? capture;
+
+	private readonly FuturesRewrittenPhaseController futuresRewrittenController = new();
+
+	private readonly ConcurrentQueue<(DateTime Timestamp, string Message)> dialogueEvents = new();
+
+	private readonly Dictionary<uint, DateTime> recentDedicatedBossHits = new();
 
 	private readonly Dictionary<PeriodicKey, PeriodicAttribution> periodicAttributions = new Dictionary<PeriodicKey, PeriodicAttribution>();
 
@@ -39,9 +49,11 @@ public sealed class CombatTracker : IDisposable
 
 	private bool anchorWasTargetable;
 
-	private DateTime? anchorLostAt;
-
 	private DateTime? combatLostAt;
+
+	private DateTime? lastPartyDamageAt;
+
+	private bool dutyCompletionPending;
 
 	public CombatAggregator Aggregator { get; }
 
@@ -53,7 +65,13 @@ public sealed class CombatTracker : IDisposable
 
 	public bool IsDisabledForPvP => clientState.IsPvP;
 
-	public CombatTracker(Configuration configuration, IFramework framework, IDataManager dataManager, IObjectTable objectTable, IPartyList partyList, IDutyState dutyState, ICondition condition, IClientState clientState, IGameInteropProvider interopProvider, IPluginLog log)
+	public PhaseDetectionPreset ActivePreset => configuration.PhaseDetectionPreset;
+
+	public string PhaseDetectionStatus => ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate
+		? futuresRewrittenController.StatusLabel
+		: Aggregator.CurrentPhase == null ? "通常計測：開始待ち" : "通常計測：計測中";
+
+	public CombatTracker(Configuration configuration, IFramework framework, IDataManager dataManager, IObjectTable objectTable, IPartyList partyList, IDutyState dutyState, ICondition condition, IClientState clientState, IChatGui chatGui, IGameInteropProvider interopProvider, IPluginLog log)
 	{
 		this.configuration = configuration;
 		this.framework = framework;
@@ -61,6 +79,7 @@ public sealed class CombatTracker : IDisposable
 		this.objectTable = objectTable;
 		this.condition = condition;
 		this.clientState = clientState;
+		this.chatGui = chatGui;
 		this.dutyState = dutyState;
 		this.log = log;
 		Aggregator = new CombatAggregator();
@@ -76,6 +95,7 @@ public sealed class CombatTracker : IDisposable
 			log.Error(ex, "ActionEffect フックを初期化できませんでした。");
 		}
 		framework.Update += OnFrameworkUpdate;
+		chatGui.ChatMessage += OnChatMessage;
 		clientState.TerritoryChanged += OnTerritoryChanged;
 		dutyState.DutyWiped += OnDutyWiped;
 		dutyState.DutyCompleted += OnDutyCompleted;
@@ -84,6 +104,7 @@ public sealed class CombatTracker : IDisposable
 	public void Dispose()
 	{
 		framework.Update -= OnFrameworkUpdate;
+		chatGui.ChatMessage -= OnChatMessage;
 		clientState.TerritoryChanged -= OnTerritoryChanged;
 		dutyState.DutyWiped -= OnDutyWiped;
 		dutyState.DutyCompleted -= OnDutyCompleted;
@@ -95,7 +116,27 @@ public sealed class CombatTracker : IDisposable
 		if (Aggregator.EndCurrentPhase(DateTime.UtcNow))
 		{
 			ResetPhaseDetection();
+			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
+			{
+				futuresRewrittenController.Reset();
+			}
 		}
+	}
+
+	public void SetPhaseDetectionPreset(PhaseDetectionPreset preset)
+	{
+		if (configuration.PhaseDetectionPreset == preset)
+		{
+			return;
+		}
+
+		if (Aggregator.Phases.Count > 0)
+		{
+			ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
+		}
+		configuration.PhaseDetectionPreset = preset;
+		configuration.Save();
+		ResetEncounterDetection();
 	}
 
 	public void ArchiveCurrentForHistory()
@@ -131,6 +172,12 @@ public sealed class CombatTracker : IDisposable
 		}
 		Dictionary<uint, string> currentMembers = Roster.GetCurrentMembers();
 		HashSet<uint> memberIds = currentMembers.Keys.ToHashSet();
+		DateTime now = DateTime.UtcNow;
+		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && condition[ConditionFlag.InCombat])
+		{
+			ApplyDedicatedTransition(futuresRewrittenController.OnCombatStarted(), now, currentMembers);
+		}
+		ProcessDialogueEvents(currentMembers);
 		if (capture != null)
 		{
 			RawActionEvent actionEvent2;
@@ -144,7 +191,19 @@ public sealed class CombatTracker : IDisposable
 				ProcessPeriodicEvent(periodicEvent2, currentMembers, memberIds);
 			}
 		}
-		CheckForPhaseEnd(DateTime.UtcNow);
+		now = DateTime.UtcNow;
+		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
+		{
+			CheckDedicatedPhaseTriggers(now, currentMembers);
+		}
+		else
+		{
+			CheckForPhaseEnd(now);
+		}
+		if (dutyCompletionPending)
+		{
+			CompleteDuty(currentMembers, now);
+		}
 		Aggregator.TrimCurrentPhases(configuration.MaxPhaseHistory);
 		Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory);
 	}
@@ -172,19 +231,35 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (Aggregator.CurrentPhase == null)
 		{
-			if (!hasOutgoingDamage && incomingGroups.Count == 0)
+			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && hasOutgoingDamage)
+			{
+				uint firstTarget = ChooseTargetableAnchor(rawAction.Effects, memberIds);
+				if (firstTarget != 0)
+				{
+					ApplyDedicatedTransition(futuresRewrittenController.OnCombatStarted(), rawAction.Timestamp, members, firstTarget);
+				}
+			}
+			else if (ActivePreset == PhaseDetectionPreset.Normal && hasOutgoingDamage)
+			{
+				uint firstTarget = ChooseTargetableAnchor(rawAction.Effects, memberIds);
+				if (firstTarget != 0)
+				{
+					BeginPhase(rawAction.Timestamp, members, firstTarget);
+				}
+			}
+
+			if (Aggregator.CurrentPhase == null)
 			{
 				return;
 			}
-			anchorTargetEntityId = hasOutgoingDamage ? ChooseAnchorTarget(rawAction.Effects, memberIds) : rawAction.SourceEntityId;
-			Aggregator.BeginPhase(rawAction.Timestamp, members, anchorTargetEntityId);
-			anchorWasTargetable = false;
-			anchorLostAt = null;
-			combatLostAt = null;
 		}
 		if (isPartySource)
 		{
 			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, partyOwnerId, playerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects), memberIds);
+			if (hasOutgoingDamage && ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
+			{
+				lastPartyDamageAt = rawAction.Timestamp;
+			}
 		}
 		if (incomingGroups.Count != 0)
 		{
@@ -209,7 +284,23 @@ public sealed class CombatTracker : IDisposable
 					SnapshotStatuses(group.Key)), memberIds);
 			}
 		}
-		TryEndPhaseForDefeatedAnchor(rawAction.Timestamp, rawAction.Effects);
+		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
+		{
+			if (hasOutgoingDamage)
+			{
+				TrackDedicatedBossHits(rawAction.Timestamp, rawAction.Effects, members);
+			}
+			if (futuresRewrittenController.Stage == FuturesRewrittenStage.Phase4 &&
+				IsNamedEnemy(rawAction.SourceEntityId, "ケフカ") &&
+				string.Equals(actionName, "どきどきアルテマ", StringComparison.Ordinal))
+			{
+				ApplyDedicatedTransition(futuresRewrittenController.OnDokiDokiUltimaCompleted(), rawAction.Timestamp, members);
+			}
+		}
+		else
+		{
+			TryEndPhaseForDefeatedAnchor(rawAction.Timestamp, rawAction.Effects);
+		}
 	}
 
 	private void ProcessPeriodicEvent(RawPeriodicEvent periodicEvent, IReadOnlyDictionary<uint, string> members, IReadOnlySet<uint> memberIds)
@@ -220,11 +311,7 @@ public sealed class CombatTracker : IDisposable
 		{
 			if (Aggregator.CurrentPhase == null)
 			{
-				anchorTargetEntityId = periodicEvent.SourceEntityId;
-				Aggregator.BeginPhase(periodicEvent.Timestamp, members, anchorTargetEntityId);
-				anchorWasTargetable = false;
-				anchorLostAt = null;
-				combatLostAt = null;
+				return;
 			}
 			string statusName = ResolveStatusName(periodicEvent.StatusId);
 			Aggregator.RecordIncomingDamage(new IncomingDamageEvent(
@@ -264,11 +351,14 @@ public sealed class CombatTracker : IDisposable
 			{
 				return;
 			}
-			anchorTargetEntityId = periodicEvent.TargetEntityId;
-			Aggregator.BeginPhase(periodicEvent.Timestamp, members, anchorTargetEntityId);
-			anchorWasTargetable = false;
-			anchorLostAt = null;
-			combatLostAt = null;
+			if (ActivePreset == PhaseDetectionPreset.Normal && IsTargetableEnemy(periodicEvent.TargetEntityId))
+			{
+				BeginPhase(periodicEvent.Timestamp, members, periodicEvent.TargetEntityId);
+			}
+			else
+			{
+				return;
+			}
 		}
 		string text = ResolveStatusName(periodicEvent.StatusId) + (periodicEvent.IsHealing ? " (HoT)" : " (DoT)");
 		uint actionId = value?.ActionId ?? (0x80000000u | periodicEvent.StatusId);
@@ -276,7 +366,18 @@ public sealed class CombatTracker : IDisposable
 		ActionKind kind = value?.Kind ?? ActionKind.Other;
 		EffectSample item = new EffectSample(periodicEvent.TargetEntityId, (!periodicEvent.IsHealing) ? periodicEvent.Amount : 0u, periodicEvent.IsHealing ? periodicEvent.Amount : 0u, Critical: false, DirectHit: false);
 		Aggregator.RecordAction(new CombatActionEvent(periodicEvent.Timestamp, num, value2, actionId, actionName, kind, CountsAsUse: false, IsGcd: false, 0.0, [item]), memberIds);
-		TryEndPhaseForDefeatedAnchor(periodicEvent.Timestamp, [item]);
+		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
+		{
+			if (flag2 && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
+			{
+				lastPartyDamageAt = periodicEvent.Timestamp;
+			}
+			TrackDedicatedBossHits(periodicEvent.Timestamp, [item], members);
+		}
+		else
+		{
+			TryEndPhaseForDefeatedAnchor(periodicEvent.Timestamp, [item]);
+		}
 	}
 
 	private void TryEndPhaseForDefeatedAnchor(DateTime timestamp, IReadOnlyList<EffectSample> effects)
@@ -370,24 +471,153 @@ public sealed class CombatTracker : IDisposable
 		return $"Status #{statusId}";
 	}
 
-	private uint ChooseAnchorTarget(IReadOnlyList<EffectSample> effects, IReadOnlySet<uint> memberIds)
+	private uint ChooseTargetableAnchor(IReadOnlyList<EffectSample> effects, IReadOnlySet<uint> memberIds)
 	{
-		uint num = 0u;
-		ulong num2 = 0uL;
+		uint selectedEntityId = 0;
+		uint selectedMaxHp = 0;
 		foreach (uint item in (from effect in effects
 			where effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId)
 			select effect.TargetEntityId).Distinct())
 		{
 			IGameObject? gameObject = objectTable.SearchByEntityId(item);
-			uint num3 = ((gameObject is ICharacter character) ? character.MaxHp : 0u);
-			ulong num4 = (ulong)(((gameObject != null && gameObject.IsTargetable) ? long.MinValue : 0) + num3);
-			if (num == 0 || num4 > num2)
+			if (gameObject is not ICharacter character || !gameObject.IsTargetable)
 			{
-				num = item;
-				num2 = num4;
+				continue;
+			}
+
+			if (selectedEntityId == 0 || character.MaxHp > selectedMaxHp)
+			{
+				selectedEntityId = item;
+				selectedMaxHp = character.MaxHp;
 			}
 		}
-		return num;
+		return selectedEntityId;
+	}
+
+	private void BeginPhase(DateTime timestamp, IReadOnlyDictionary<uint, string> members, uint anchorEntityId)
+	{
+		anchorTargetEntityId = anchorEntityId;
+		Aggregator.BeginPhase(timestamp, members, anchorEntityId);
+		anchorWasTargetable = anchorEntityId != 0 && objectTable.SearchByEntityId(anchorEntityId)?.IsTargetable == true;
+		combatLostAt = null;
+	}
+
+	private bool IsTargetableEnemy(uint entityId) =>
+		objectTable.SearchByEntityId(entityId) is ICharacter character && character.IsTargetable && !character.IsDead;
+
+	private void OnChatMessage(IHandleableChatMessage message)
+	{
+		string text = message.Message.TextValue;
+		if (!string.IsNullOrWhiteSpace(text))
+		{
+			dialogueEvents.Enqueue((DateTime.UtcNow, text));
+		}
+	}
+
+	private void ProcessDialogueEvents(IReadOnlyDictionary<uint, string> members)
+	{
+		while (dialogueEvents.TryDequeue(out (DateTime Timestamp, string Message) dialogue))
+		{
+			if (ActivePreset != PhaseDetectionPreset.FuturesRewrittenUltimate)
+			{
+				continue;
+			}
+
+			ApplyDedicatedTransition(futuresRewrittenController.OnDialogue(dialogue.Message), dialogue.Timestamp, members);
+		}
+	}
+
+	private void CheckDedicatedPhaseTriggers(DateTime now, IReadOnlyDictionary<uint, string> members)
+	{
+		if (futuresRewrittenController.Stage == FuturesRewrittenStage.Phase2 && EnemyListReader.TryIsEmpty(out bool enemyListIsEmpty))
+		{
+			ApplyDedicatedTransition(futuresRewrittenController.OnEnemyListState(enemyListIsEmpty), now, members);
+		}
+
+		bool kefkaTargetable = objectTable.Any(gameObject =>
+			gameObject != null && gameObject.IsTargetable &&
+			string.Equals(gameObject.Name.TextValue, "ケフカ", StringComparison.Ordinal));
+		ApplyDedicatedTransition(futuresRewrittenController.OnKefkaTargetability(kefkaTargetable), now, members,
+			kefkaTargetable ? FindTargetableEnemy("ケフカ") : 0);
+
+		if (futuresRewrittenController.Stage != FuturesRewrittenStage.Phase3 || recentDedicatedBossHits.Count == 0)
+		{
+			return;
+		}
+
+		foreach (KeyValuePair<uint, DateTime> hit in recentDedicatedBossHits.OrderByDescending(entry => entry.Value).ToArray())
+		{
+			if (objectTable.SearchByEntityId(hit.Key) is not ICharacter character || (!character.IsDead && character.CurrentHp != 0))
+			{
+				continue;
+			}
+
+			string enemyName = character.Name.TextValue;
+			ApplyDedicatedTransition(futuresRewrittenController.OnBossDefeated(enemyName), hit.Value, members);
+			break;
+		}
+	}
+
+	private void TrackDedicatedBossHits(DateTime timestamp, IReadOnlyList<EffectSample> effects, IReadOnlyDictionary<uint, string> members)
+	{
+		if (futuresRewrittenController.Stage != FuturesRewrittenStage.Phase3)
+		{
+			return;
+		}
+
+		foreach (EffectSample effect in effects.Where(effect => effect.Damage != 0))
+		{
+			if (!IsNamedEnemy(effect.TargetEntityId, "カオス") && !IsNamedEnemy(effect.TargetEntityId, "エクスデス"))
+			{
+				continue;
+			}
+
+			recentDedicatedBossHits[effect.TargetEntityId] = timestamp;
+			if (objectTable.SearchByEntityId(effect.TargetEntityId) is ICharacter character && (character.IsDead || character.CurrentHp == 0))
+			{
+				ApplyDedicatedTransition(futuresRewrittenController.OnBossDefeated(character.Name.TextValue), timestamp, members);
+				return;
+			}
+		}
+	}
+
+	private bool IsNamedEnemy(uint entityId, string expectedName) =>
+		objectTable.SearchByEntityId(entityId) is ICharacter character &&
+		string.Equals(character.Name.TextValue, expectedName, StringComparison.Ordinal);
+
+	private uint FindTargetableEnemy(string expectedName)
+	{
+		foreach (IGameObject gameObject in objectTable)
+		{
+			if (gameObject != null && gameObject.IsTargetable && string.Equals(gameObject.Name.TextValue, expectedName, StringComparison.Ordinal))
+			{
+				return gameObject.EntityId;
+			}
+		}
+
+		return 0;
+	}
+
+	private void ApplyDedicatedTransition(DedicatedPhaseTransition transition, DateTime timestamp, IReadOnlyDictionary<uint, string> members, uint anchorEntityId = 0)
+	{
+		if (transition.Command == DedicatedPhaseCommand.None)
+		{
+			return;
+		}
+
+		if (transition.Command == DedicatedPhaseCommand.End)
+		{
+			EndPhase(timestamp);
+			log.Information("絶妖星乱舞 Phase {PhaseNumber} の計測を終了しました。", transition.PhaseNumber);
+			return;
+		}
+
+		if (Aggregator.CurrentPhase != null)
+		{
+			EndPhase(timestamp);
+		}
+		BeginPhase(timestamp, members, anchorEntityId);
+		log.Information("絶妖星乱舞 Phase {PhaseNumber} の計測を開始しました。", transition.PhaseNumber);
 	}
 
 	private void CheckForPhaseEnd(DateTime now)
@@ -403,21 +633,11 @@ public sealed class CombatTracker : IDisposable
 			if (gameObject != null && gameObject.IsTargetable)
 			{
 				anchorWasTargetable = true;
-				anchorLostAt = null;
 			}
 			else if (anchorWasTargetable)
 			{
-				valueOrDefault = anchorLostAt.GetValueOrDefault();
-				if (!anchorLostAt.HasValue)
-				{
-					valueOrDefault = now;
-					anchorLostAt = valueOrDefault;
-				}
-				if ((now - anchorLostAt.Value).TotalSeconds >= (double)configuration.TargetLossGraceSeconds)
-				{
-					EndPhase(now);
-					return;
-				}
+				EndPhase(now);
+				return;
 			}
 		}
 		if (condition[ConditionFlag.InCombat])
@@ -449,6 +669,7 @@ public sealed class CombatTracker : IDisposable
 	{
 		EndPhase(DateTime.UtcNow);
 		periodicAttributions.Clear();
+		ResetEncounterDetection();
 	}
 
 	private void OnDutyWiped(IDutyStateEventArgs _)
@@ -458,6 +679,19 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnDutyCompleted(IDutyStateEventArgs _)
 	{
+		dutyCompletionPending = true;
+	}
+
+	private void CompleteDuty(IReadOnlyDictionary<uint, string> members, DateTime now)
+	{
+		dutyCompletionPending = false;
+		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
+		{
+			DedicatedPhaseTransition transition = futuresRewrittenController.OnDutyCompleted();
+			DateTime phaseEnd = lastPartyDamageAt ?? now;
+			ApplyDedicatedTransition(transition, phaseEnd, members);
+		}
+
 		ArchiveCurrentCombat(CombatHistoryEndReason.DutyCompleted);
 	}
 
@@ -472,7 +706,7 @@ public sealed class CombatTracker : IDisposable
 		configuration.SelectedEntityId = 0u;
 		configuration.Save();
 		periodicAttributions.Clear();
-		ResetPhaseDetection();
+		ResetEncounterDetection();
 		DrainPendingCapture();
 	}
 
@@ -495,7 +729,18 @@ public sealed class CombatTracker : IDisposable
 	{
 		anchorTargetEntityId = 0u;
 		anchorWasTargetable = false;
-		anchorLostAt = null;
 		combatLostAt = null;
+	}
+
+	private void ResetEncounterDetection()
+	{
+		ResetPhaseDetection();
+		futuresRewrittenController.Reset();
+		recentDedicatedBossHits.Clear();
+		lastPartyDamageAt = null;
+		dutyCompletionPending = false;
+		while (dialogueEvents.TryDequeue(out _))
+		{
+		}
 	}
 }
