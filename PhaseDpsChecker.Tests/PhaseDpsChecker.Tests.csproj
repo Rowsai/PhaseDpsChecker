@@ -9,6 +9,8 @@
   <ItemGroup>
     <Compile Include="..\PhaseDpsChecker\Combat\ActionKind.cs" Link="Combat\ActionKind.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\ActionGcdClassifier.cs" Link="Combat\ActionGcdClassifier.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\CastInterruptionParser.cs" Link="Combat\CastInterruptionParser.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\HistoryFileSizeMonitor.cs" Link="Combat\HistoryFileSizeMonitor.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\PhaseEndDetection.cs" Link="Combat\PhaseEndDetection.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\FuturesRewrittenPhaseController.cs" Link="Combat\FuturesRewrittenPhaseController.cs" />

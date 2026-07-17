@@ -12,6 +12,10 @@ public sealed class ActionStatistics
 
 	public int UseCount { get; private set; }
 
+	public int InterruptedCastCount { get; private set; }
+
+	public bool IsHealingAction { get; private set; }
+
 	public long TotalDamage { get; private set; }
 
 	public long TotalHealing { get; private set; }
@@ -46,16 +50,27 @@ public sealed class ActionStatistics
 		}
 	}
 
-	public ActionStatistics(uint actionId, string actionName, ActionKind kind)
+	public ActionStatistics(uint actionId, string actionName, ActionKind kind, bool isHealingAction = false)
 	{
 		ActionId = actionId;
 		ActionName = actionName;
 		Kind = kind;
+		IsHealingAction = isHealingAction;
 	}
 
 	internal void BeginUse()
 	{
 		UseCount++;
+	}
+
+	internal void AddInterruptedCast()
+	{
+		InterruptedCastCount++;
+	}
+
+	internal void MarkAsHealingAction()
+	{
+		IsHealingAction = true;
 	}
 
 	internal void AddDamage(EffectSample effect)
@@ -66,12 +81,15 @@ public sealed class ActionStatistics
 
 	internal void AddHealing(EffectSample effect)
 	{
+		MarkAsHealingAction();
 		TotalHealing += effect.Healing;
 		AddEffect(effect.Healing, effect.Critical, effect.DirectHit);
 	}
 
 	internal void RestoreState(
 		int useCount,
+		int interruptedCastCount,
+		bool isHealingAction,
 		long totalDamage,
 		long totalHealing,
 		int effectCount,
@@ -82,6 +100,8 @@ public sealed class ActionStatistics
 		uint minimumAmount)
 	{
 		UseCount = useCount;
+		InterruptedCastCount = interruptedCastCount;
+		IsHealingAction = isHealingAction;
 		TotalDamage = totalDamage;
 		TotalHealing = totalHealing;
 		EffectCount = effectCount;

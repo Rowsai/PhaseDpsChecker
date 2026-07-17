@@ -96,6 +96,17 @@ public sealed class CombatAggregator
 		currentPhase.AddIncomingDamage(damageEvent);
 	}
 
+	public void RecordInterruptedCast(uint entityId, string playerName, uint actionId, string actionName, ActionKind kind, bool isHealingAction)
+	{
+		PhaseRecord currentPhase = CurrentPhase;
+		if (currentPhase == null)
+		{
+			return;
+		}
+		PlayerPhaseStatistics player = currentPhase.EnsurePlayer(entityId, playerName);
+		player.AddInterruptedCast(actionId, actionName, kind, isHealingAction);
+	}
+
 	public bool EndCurrentPhase(DateTime timestamp)
 	{
 		PhaseRecord currentPhase = CurrentPhase;
@@ -159,5 +170,16 @@ public sealed class CombatAggregator
 	{
 		histories.Clear();
 		nextHistoryNumber = 1;
+	}
+
+	public bool RemoveArchivedHistory(int historyNumber)
+	{
+		int index = histories.FindIndex(history => history.Number == historyNumber);
+		if (index < 0)
+		{
+			return false;
+		}
+		histories.RemoveAt(index);
+		return true;
 	}
 }

@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	private readonly PartyOverlayWindow partyOverlayWindow;
 
 	private readonly CombatTracker combatTracker;
+	private HistoryFileSizeLevel lastHistoryFileSizeLevel;
 
 	[PluginService]
 	internal static IDalamudPluginInterface PluginInterface { get; private set; }
@@ -112,6 +113,12 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 
 	private void DrawUi()
 	{
+		HistoryFileSizeLevel currentHistoryFileSizeLevel = combatTracker.HistoryFileSizeStatus.Level;
+		if (currentHistoryFileSizeLevel == HistoryFileSizeLevel.Danger && lastHistoryFileSizeLevel != HistoryFileSizeLevel.Danger)
+		{
+			mainWindow.IsOpen = true;
+		}
+		lastHistoryFileSizeLevel = currentHistoryFileSizeLevel;
 		partyOverlayWindow.IsOpen = Configuration.ShowPartyOverlay;
 		windowSystem.Draw();
 	}

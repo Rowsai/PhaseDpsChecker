@@ -120,9 +120,12 @@ internal sealed class CombatHistoryStore
 					savedPlayer.HealingGcdIntervals.Select(interval => (interval.Start, interval.End)));
 				foreach (ActionDto savedAction in savedPlayer.Actions)
 				{
-					ActionStatistics action = new(savedAction.ActionId, savedAction.ActionName, savedAction.Kind);
+					bool isHealingAction = savedAction.IsHealingAction || savedAction.TotalHealing > 0;
+					ActionStatistics action = new(savedAction.ActionId, savedAction.ActionName, savedAction.Kind, isHealingAction);
 					action.RestoreState(
 						savedAction.UseCount,
+						savedAction.InterruptedCastCount,
+						isHealingAction,
 						savedAction.TotalDamage,
 						savedAction.TotalHealing,
 						savedAction.EffectCount,
@@ -236,6 +239,8 @@ internal sealed class CombatHistoryStore
 		public string ActionName { get; set; } = string.Empty;
 		public ActionKind Kind { get; set; }
 		public int UseCount { get; set; }
+		public int InterruptedCastCount { get; set; }
+		public bool IsHealingAction { get; set; }
 		public long TotalDamage { get; set; }
 		public long TotalHealing { get; set; }
 		public int EffectCount { get; set; }
@@ -251,6 +256,8 @@ internal sealed class CombatHistoryStore
 			ActionName = action.ActionName,
 			Kind = action.Kind,
 			UseCount = action.UseCount,
+			InterruptedCastCount = action.InterruptedCastCount,
+			IsHealingAction = action.IsHealingAction,
 			TotalDamage = action.TotalDamage,
 			TotalHealing = action.TotalHealing,
 			EffectCount = action.EffectCount,

@@ -43,6 +43,7 @@ public sealed class CombatTracker : IDisposable
 	private readonly ConcurrentQueue<(DateTime Timestamp, string Message)> dialogueEvents = new();
 
 	private readonly Dictionary<PeriodicKey, PeriodicAttribution> periodicAttributions = new Dictionary<PeriodicKey, PeriodicAttribution>();
+	private readonly Dictionary<string, (uint ActionId, ActionKind Kind, bool IsHealingAction)> interruptedActionCache = new(StringComparer.Ordinal);
 
 	private uint anchorTargetEntityId;
 
@@ -73,6 +74,8 @@ public sealed class CombatTracker : IDisposable
 	public string HistoryFilePath => historyStore.FilePath;
 
 	public string? HistoryPersistenceError => historyStore.LastError;
+
+	public HistoryFileSizeStatus HistoryFileSizeStatus => HistoryFileSizeMonitor.Read(HistoryFilePath);
 
 	public string PhaseDetectionStatus => ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate
 		? futuresRewrittenController.StatusLabel
@@ -189,6 +192,16 @@ public sealed class CombatTracker : IDisposable
 	{
 		Aggregator.ClearArchivedHistory();
 		historyStore.Save(Aggregator.Histories);
+	}
+
+	public bool DeleteArchivedHistory(int historyNumber)
+	{
+		if (!Aggregator.RemoveArchivedHistory(historyNumber))
+		{
+			return false;
+		}
+		historyStore.Save(Aggregator.Histories);
+		return true;
 	}
 
 	public void SetHistoryDirectory(string directory)
@@ -573,6 +586,13 @@ public sealed class CombatTracker : IDisposable
 	{
 		while (dialogueEvents.TryDequeue(out (DateTime Timestamp, string Message) dialogue))
 		{
+			if (CastInterruptionParser.TryParse(dialogue.Message, out CastInterruption interruption) &&
+				CastInterruptionParser.TryResolvePartyMember(interruption.PlayerName, members, out uint entityId, out string playerName))
+			{
+				(uint actionId, ActionKind kind, bool isHealingAction) = ResolveInterruptedAction(interruption.ActionName);
+				Aggregator.RecordInterruptedCast(entityId, playerName, actionId, interruption.ActionName, kind, isHealingAction);
+			}
+
 			if (ActivePreset != PhaseDetectionPreset.FuturesRewrittenUltimate)
 			{
 				continue;
@@ -580,6 +600,37 @@ public sealed class CombatTracker : IDisposable
 
 			ApplyDedicatedTransition(futuresRewrittenController.OnDialogue(dialogue.Message), dialogue.Timestamp, members);
 		}
+	}
+
+	private (uint ActionId, ActionKind Kind, bool IsHealingAction) ResolveInterruptedAction(string actionName)
+	{
+		if (interruptedActionCache.TryGetValue(actionName, out var cached))
+		{
+			return cached;
+		}
+
+		foreach (var row in dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>())
+		{
+			if (!row.IsPlayerAction || !string.Equals(row.Name.ToString(), actionName, StringComparison.Ordinal))
+			{
+				continue;
+			}
+			ActionKind kind = row.ActionCategory.RowId switch
+			{
+				2u => ActionKind.Magic,
+				3u => ActionKind.WeaponSkill,
+				4u => ActionKind.Ability,
+				_ => ActionKind.Other
+			};
+			bool isHealingAction = !row.CanTargetHostile && (row.CanTargetParty || row.CanTargetSelf);
+			var resolved = (row.RowId, kind, isHealingAction);
+			interruptedActionCache[actionName] = resolved;
+			return resolved;
+		}
+
+		var fallback = (CastInterruptionParser.CreateSyntheticActionId(actionName), ActionKind.Magic, false);
+		interruptedActionCache[actionName] = fallback;
+		return fallback;
 	}
 
 	private void CheckDedicatedPhaseTriggers(DateTime now, IReadOnlyDictionary<uint, string> members)

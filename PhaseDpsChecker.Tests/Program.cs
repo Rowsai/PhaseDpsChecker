@@ -17,6 +17,9 @@ var tests = new (string Name, Action Run)[]
 	("追加リキャストグループの GCD 判定", AdditionalCooldownGroupGcd),
 	("被ダメージ時ステータスを防御系に限定", DefensiveStatusesOnly),
 	("履歴JSONの保存と復元", HistoryPersistenceRoundTrip),
+	("詠唱中断ログの解析と集計", InterruptedCastCounting),
+	("履歴を個別に削除", DeleteIndividualHistory),
+	("履歴ファイル容量の境界判定", HistoryFileSizeThresholds),
 };
 
 foreach (var test in tests)
@@ -124,6 +127,7 @@ static void HistoryPersistenceRoundTrip()
 		var aggregator = new CombatAggregator();
 		aggregator.BeginPhase(t0, party, 900);
 		aggregator.RecordAction(Event(t0, 1, 10, "Drill", new EffectSample(900, 5000, 0, true, true), true, 2.5), partyIds);
+		aggregator.RecordInterruptedCast(1, "Machinist", 20, "ケアルガ", ActionKind.Magic, isHealingAction: true);
 		aggregator.RecordIncomingDamage(new IncomingDamageEvent(t0.AddSeconds(2), 1, "Machinist", 900, "Enemy", 20, "Attack", 1000, [new CombatStatusSnapshot(1191, "Rampart", 0, 8)]), partyIds);
 		aggregator.ArchiveCurrent(t0.AddSeconds(10), CombatHistoryEndReason.Wipe);
 
@@ -134,6 +138,8 @@ static void HistoryPersistenceRoundTrip()
 		PlayerPhaseStatistics player = loaded.Single().Phases.Single().Players[1];
 		Equal(5000L, player.TotalDamage, "damage restored");
 		Equal("Drill", player.Actions[10].ActionName, "action restored");
+		Equal(1, player.Actions[20].InterruptedCastCount, "interrupted cast restored");
+		Equal(true, player.Actions[20].IsHealingAction, "healing action classification restored");
 		Near(0.25, player.DamageActiveRate(t0, t0.AddSeconds(10)), 0.001, "damage active restored");
 		Equal(1000u, loaded.Single().Phases.Single().IncomingDamageEvents.Single().Amount, "incoming damage restored");
 	}
@@ -144,6 +150,54 @@ static void HistoryPersistenceRoundTrip()
 			Directory.Delete(directory, true);
 		}
 	}
+}
+
+static void InterruptedCastCounting()
+{
+	Equal(true, CastInterruptionParser.TryParse("Alice Exampleは「鼓舞激励の策」の詠唱を中断した。", out CastInterruption interruption), "Japanese interruption parsed");
+	Equal("Alice Example", interruption.PlayerName, "parsed player");
+	Equal("鼓舞激励の策", interruption.ActionName, "parsed action");
+	Equal(true, CastInterruptionParser.TryParse("バトルログ：White Mageは「ケアルガ」の詠唱を中断した。", out CastInterruption replayInterruption), "prefixed replay interruption parsed");
+	var party = new Dictionary<uint, string> { [1] = "Alice Example", [2] = "White Mage" };
+	Equal(true, CastInterruptionParser.TryResolvePartyMember(replayInterruption.PlayerName, party, out uint entityId, out string playerName), "replay member resolved");
+	Equal(2u, entityId, "replay entity");
+
+	var t0 = DateTime.UtcNow;
+	var aggregator = new CombatAggregator();
+	aggregator.BeginPhase(t0, party, 900);
+	aggregator.RecordInterruptedCast(entityId, playerName, 20, replayInterruption.ActionName, ActionKind.Magic, isHealingAction: true);
+	aggregator.RecordInterruptedCast(entityId, playerName, 20, replayInterruption.ActionName, ActionKind.Magic, isHealingAction: true);
+	ActionStatistics action = aggregator.CurrentPhase!.Players[2].Actions[20];
+	Equal(0, action.UseCount, "interruption does not increment use count");
+	Equal(2, action.InterruptedCastCount, "interruption count");
+	Equal(true, action.IsHealingAction, "healing spell classification");
+	Equal(false, CastInterruptionParser.TryResolvePartyMember("Exdeath", party, out _, out _), "enemy cast interruption excluded");
+}
+
+static void DeleteIndividualHistory()
+{
+	var t0 = DateTime.UtcNow;
+	var party = new Dictionary<uint, string> { [1] = "Player" };
+	var aggregator = new CombatAggregator();
+	aggregator.BeginPhase(t0, party, 900);
+	aggregator.ArchiveCurrent(t0.AddSeconds(5), CombatHistoryEndReason.Wipe);
+	aggregator.BeginPhase(t0.AddSeconds(10), party, 901);
+	aggregator.ArchiveCurrent(t0.AddSeconds(15), CombatHistoryEndReason.Wipe);
+	Equal(true, aggregator.RemoveArchivedHistory(1), "selected history removed");
+	Equal(1, aggregator.Histories.Count, "remaining history count");
+	Equal(2, aggregator.Histories.Single().Number, "correct history remains");
+	Equal(false, aggregator.RemoveArchivedHistory(999), "missing history not removed");
+	aggregator.BeginPhase(t0.AddSeconds(20), party, 902);
+	CombatHistoryRecord next = aggregator.ArchiveCurrent(t0.AddSeconds(25), CombatHistoryEndReason.Wipe)!;
+	Equal(3, next.Number, "history number remains monotonic");
+}
+
+static void HistoryFileSizeThresholds()
+{
+	Equal(HistoryFileSizeLevel.Normal, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.WarningThresholdBytes), "500 MB is below warning");
+	Equal(HistoryFileSizeLevel.Warning, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.WarningThresholdBytes + 1), "over 500 MB warning");
+	Equal(HistoryFileSizeLevel.Warning, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.DangerThresholdBytes), "1 GB is still warning");
+	Equal(HistoryFileSizeLevel.Danger, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.DangerThresholdBytes + 1), "over 1 GB danger");
 }
 
 static void PhaseNumberAfterTrim()

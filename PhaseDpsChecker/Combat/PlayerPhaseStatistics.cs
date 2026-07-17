@@ -57,18 +57,27 @@ public sealed class PlayerPhaseStatistics
 		}
 	}
 
-	internal ActionStatistics GetAction(uint actionId, string actionName, ActionKind kind, bool countsAsUse)
+	internal ActionStatistics GetAction(uint actionId, string actionName, ActionKind kind, bool countsAsUse, bool isHealingAction = false)
 	{
 		if (!Actions.TryGetValue(actionId, out ActionStatistics value))
 		{
-			value = new ActionStatistics(actionId, actionName, kind);
+			value = new ActionStatistics(actionId, actionName, kind, isHealingAction);
 			Actions.Add(actionId, value);
+		}
+		else if (isHealingAction)
+		{
+			value.MarkAsHealingAction();
 		}
 		if (countsAsUse)
 		{
 			value.BeginUse();
 		}
 		return value;
+	}
+
+	internal void AddInterruptedCast(uint actionId, string actionName, ActionKind kind, bool isHealingAction)
+	{
+		GetAction(actionId, actionName, kind, countsAsUse: false, isHealingAction).AddInterruptedCast();
 	}
 
 	internal void AddDamage(string actionName, ActionStatistics action, EffectSample effect)

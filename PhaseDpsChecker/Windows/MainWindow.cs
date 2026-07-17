@@ -38,6 +38,7 @@ public sealed class MainWindow : Window, IDisposable
 	private readonly ConcurrentQueue<string> historyFolderPickerErrors = new();
 	private int historyFolderPickerRunning;
 	private string? historyFolderPickerError;
+	private HistoryFileSizeLevel lastHistoryFileSizeLevel;
 
 	private enum SummarySortColumn
 	{
@@ -71,6 +72,7 @@ public sealed class MainWindow : Window, IDisposable
 		Number,
 		Action,
 		Count,
+		InterruptedCast,
 		TotalDamage,
 		TotalHealing,
 		Critical,
@@ -123,7 +125,14 @@ public sealed class MainWindow : Window, IDisposable
 
 	public override void Draw()
 	{
-		DrawWarnings();
+		HistoryFileSizeStatus historyFileSizeStatus = tracker.HistoryFileSizeStatus;
+		if (historyFileSizeStatus.Level == HistoryFileSizeLevel.Danger && lastHistoryFileSizeLevel != HistoryFileSizeLevel.Danger)
+		{
+			ImGui.OpenPopup("履歴ファイル容量の警告###HistoryFileDangerPopup");
+		}
+		lastHistoryFileSizeLevel = historyFileSizeStatus.Level;
+		DrawWarnings(historyFileSizeStatus);
+		DrawHistoryFileDangerPopup(historyFileSizeStatus);
 		if (!ImGui.BeginTabBar("##PhaseDpsCheckerTabs"))
 		{
 			return;
@@ -152,7 +161,7 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.EndTabBar();
 	}
 
-	private void DrawWarnings()
+	private void DrawWarnings(HistoryFileSizeStatus historyFileSizeStatus)
 	{
 		if (!tracker.CaptureAvailable)
 		{
@@ -168,6 +177,35 @@ public sealed class MainWindow : Window, IDisposable
 			ImGui.TextColored(new Vector4(1f, 0.75f, 0.2f, 1f), "PvP中は戦闘集計を無効化しています。");
 			ImGui.Separator();
 		}
+		if (historyFileSizeStatus.Level == HistoryFileSizeLevel.Warning)
+		{
+			ImGui.TextColored(new Vector4(1f, 0.72f, 0.18f, 1f), "履歴ファイルが閾値：警告に到達しました。");
+			ImGui.TextDisabled($"現在のファイルサイズ: {FormatFileSize(historyFileSizeStatus.SizeBytes)}");
+			ImGui.Separator();
+		}
+		else if (historyFileSizeStatus.Level == HistoryFileSizeLevel.Danger)
+		{
+			ImGui.TextColored(new Vector4(1f, 0.25f, 0.2f, 1f), "履歴ファイルが閾値：危険に到達しました。");
+			ImGui.TextDisabled($"現在のファイルサイズ: {FormatFileSize(historyFileSizeStatus.SizeBytes)}");
+			ImGui.Separator();
+		}
+	}
+
+	private void DrawHistoryFileDangerPopup(HistoryFileSizeStatus status)
+	{
+		bool open = true;
+		if (!ImGui.BeginPopupModal("履歴ファイル容量の警告###HistoryFileDangerPopup", ref open, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings))
+		{
+			return;
+		}
+		ImGui.TextColored(new Vector4(1f, 0.25f, 0.2f, 1f), "履歴ファイルが閾値：危険に到達しました。");
+		ImGui.TextWrapped($"履歴ファイルが1GBを超えています。不要な履歴の削除を推奨します。\n現在: {FormatFileSize(status.SizeBytes)}\n{tracker.HistoryFilePath}");
+		ImGui.Spacing();
+		if (ImGui.Button("確認", new Vector2(120f, 0f)))
+		{
+			ImGui.CloseCurrentPopup();
+		}
+		ImGui.EndPopup();
 	}
 
 	private void DrawSettings()
@@ -348,6 +386,10 @@ public sealed class MainWindow : Window, IDisposable
 			selectedHistoryPhaseNumber = 0;
 			selectedHistoryFilterPhaseNumber = 0;
 		});
+		if (DrawHistoryDeleteControl(history))
+		{
+			return;
+		}
 
 		ImGui.TextUnformatted("Phase表示範囲");
 		ImGui.SetNextItemWidth(380f);
@@ -692,13 +734,13 @@ public sealed class MainWindow : Window, IDisposable
 		}
 
 		ImGui.Spacing();
-		DrawSectionTitle("アクション内訳", "カテゴリ別に使用回数、ダメージ、回復量を表示します。各ヘッダをクリックすると並び替えできます。");
+		DrawSectionTitle("アクション内訳", "カテゴリ別に使用回数、詠唱失敗数、ダメージ、回復量を表示します。各ヘッダをクリックすると並び替えできます。");
 		List<ActionStatistics> actions = player.Actions.Values.ToList();
 		DrawActionGroup("ウェポンスキル", actions.Where(action => action.Kind == ActionKind.WeaponSkill), idPrefix);
-		DrawActionGroup("アビリティ", actions.Where(action => action.Kind == ActionKind.Ability && (action.TotalDamage > 0 || action.TotalHealing == 0)), idPrefix);
-		DrawActionGroup("魔法", actions.Where(action => action.Kind == ActionKind.Magic && (action.TotalDamage > 0 || action.TotalHealing == 0)), idPrefix);
-		DrawActionGroup("回復魔法", actions.Where(action => action.Kind == ActionKind.Magic && action.TotalHealing > 0), idPrefix);
-		DrawActionGroup("回復アビリティ", actions.Where(action => action.Kind == ActionKind.Ability && action.TotalHealing > 0), idPrefix);
+		DrawActionGroup("アビリティ", actions.Where(action => action.Kind == ActionKind.Ability && !action.IsHealingAction), idPrefix);
+		DrawActionGroup("魔法", actions.Where(action => action.Kind == ActionKind.Magic && !action.IsHealingAction), idPrefix);
+		DrawActionGroup("回復魔法", actions.Where(action => action.Kind == ActionKind.Magic && action.IsHealingAction), idPrefix);
+		DrawActionGroup("回復アビリティ", actions.Where(action => action.Kind == ActionKind.Ability && action.IsHealingAction), idPrefix);
 		DrawActionGroup("その他 / オートアタック", actions.Where(action => action.Kind == ActionKind.Other), idPrefix);
 	}
 
@@ -755,6 +797,40 @@ public sealed class MainWindow : Window, IDisposable
 		}
 		comparison = right.Dps.CompareTo(left.Dps);
 		return comparison != 0 ? comparison : StringComparer.CurrentCulture.Compare(left.Player.PlayerName, right.Player.PlayerName);
+	}
+
+	private bool DrawHistoryDeleteControl(CombatHistoryRecord history)
+	{
+		if (ImGui.Button("選択した履歴を削除"))
+		{
+			ImGui.OpenPopup("履歴削除の確認###DeleteHistoryConfirmation");
+		}
+
+		bool open = true;
+		bool deleted = false;
+		if (ImGui.BeginPopupModal("履歴削除の確認###DeleteHistoryConfirmation", ref open, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings))
+		{
+			ImGui.TextWrapped($"履歴 #{history.Number} を削除します。\nこの操作は元に戻せません。");
+			ImGui.Spacing();
+			if (ImGui.Button("削除する", new Vector2(120f, 0f)))
+			{
+				deleted = tracker.DeleteArchivedHistory(history.Number);
+				selectedHistoryNumber = 0;
+				selectedHistoryEntityId = 0;
+				selectedHistoryPhaseNumber = 0;
+				selectedHistoryFilterPhaseNumber = 0;
+				selectedIncomingHistoryNumber = 0;
+				selectedIncomingEntityId = 0;
+				ImGui.CloseCurrentPopup();
+			}
+			ImGui.SameLine();
+			if (ImGui.Button("キャンセル", new Vector2(120f, 0f)))
+			{
+				ImGui.CloseCurrentPopup();
+			}
+			ImGui.EndPopup();
+		}
+		return deleted;
 	}
 
 	private void OpenHistoryFolderPicker()
@@ -910,11 +986,12 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.TextColored(new Vector4(0.35f, 0.76f, 1f, 1f), $"{label}  {actions.Count}種");
 		ImGui.PushID(idPrefix);
 		ImGui.PushID(label);
-		if (actions.Count != 0 && ImGui.BeginTable("##Actions", 10, TableFlags))
+		if (actions.Count != 0 && ImGui.BeginTable("##Actions", 11, TableFlags))
 		{
 			ImGui.TableSetupColumn("No");
 			ImGui.TableSetupColumn("アクション");
 			ImGui.TableSetupColumn("回数");
+			ImGui.TableSetupColumn("詠唱失敗");
 			ImGui.TableSetupColumn("総ダメージ");
 			ImGui.TableSetupColumn("総回復量");
 			ImGui.TableSetupColumn("Crit %");
@@ -930,13 +1007,14 @@ public sealed class MainWindow : Window, IDisposable
 				TextColumn(0, (index + 1).ToString());
 				TextColumn(1, action.ActionName);
 				TextColumn(2, action.UseCount.ToString("N0"));
-				TextColumn(3, action.TotalDamage.ToString("N0"));
-				TextColumn(4, action.TotalHealing.ToString("N0"));
-				TextColumn(5, Percent(action.CriticalRate));
-				TextColumn(6, Percent(action.DirectHitRate));
-				TextColumn(7, Percent(action.CriticalDirectHitRate));
-				TextColumn(8, action.MaximumAmount.ToString("N0"));
-				TextColumn(9, action.DisplayMinimumAmount.ToString("N0"));
+				TextColumn(3, action.InterruptedCastCount.ToString("N0"));
+				TextColumn(4, action.TotalDamage.ToString("N0"));
+				TextColumn(5, action.TotalHealing.ToString("N0"));
+				TextColumn(6, Percent(action.CriticalRate));
+				TextColumn(7, Percent(action.DirectHitRate));
+				TextColumn(8, Percent(action.CriticalDirectHitRate));
+				TextColumn(9, action.MaximumAmount.ToString("N0"));
+				TextColumn(10, action.DisplayMinimumAmount.ToString("N0"));
 			}
 			ImGui.EndTable();
 		}
@@ -950,7 +1028,7 @@ public sealed class MainWindow : Window, IDisposable
 
 	private void DrawSortableActionHeader(string sortKey, ActionSortColumn selectedColumn, bool descending)
 	{
-		string[] labels = ["No", "アクション", "回数", "総ダメージ", "総回復量", "Crit %", "DH %", "Crit + DH %", "最大", "最小"];
+		string[] labels = ["No", "アクション", "回数", "詠唱失敗", "総ダメージ", "総回復量", "Crit %", "DH %", "Crit + DH %", "最大", "最小"];
 		ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
 		for (int index = 0; index < labels.Length; index++)
 		{
@@ -974,6 +1052,7 @@ public sealed class MainWindow : Window, IDisposable
 			ActionSortColumn.Number => left.ActionId.CompareTo(right.ActionId),
 			ActionSortColumn.Action => StringComparer.CurrentCulture.Compare(left.ActionName, right.ActionName),
 			ActionSortColumn.Count => left.UseCount.CompareTo(right.UseCount),
+			ActionSortColumn.InterruptedCast => left.InterruptedCastCount.CompareTo(right.InterruptedCastCount),
 			ActionSortColumn.TotalDamage => left.TotalDamage.CompareTo(right.TotalDamage),
 			ActionSortColumn.TotalHealing => left.TotalHealing.CompareTo(right.TotalHealing),
 			ActionSortColumn.Critical => left.CriticalRate.CompareTo(right.CriticalRate),
@@ -1128,6 +1207,15 @@ public sealed class MainWindow : Window, IDisposable
 			duration = TimeSpan.Zero;
 		}
 		return $"{(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}";
+	}
+
+	private static string FormatFileSize(long sizeBytes)
+	{
+		const double gibibyte = 1024d * 1024d * 1024d;
+		const double mebibyte = 1024d * 1024d;
+		return sizeBytes >= gibibyte
+			? $"{sizeBytes / gibibyte:N2} GB"
+			: $"{sizeBytes / mebibyte:N2} MB";
 	}
 
 	private static string FormatStatuses(IReadOnlyList<CombatStatusSnapshot> statuses)
