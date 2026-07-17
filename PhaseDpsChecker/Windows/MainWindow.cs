@@ -220,6 +220,21 @@ public sealed class MainWindow : Window, IDisposable
 			historyFolderPickerError = pickerError;
 		}
 
+		DrawSectionTitle("プラグイン動作", "戦闘データの取得と集計を有効または無効にします。");
+		bool pluginEnabled = configuration.IsEnabled;
+		if (ImGui.Checkbox("Phase DPS Checkerを有効にする", ref pluginEnabled))
+		{
+			tracker.SetPluginEnabled(pluginEnabled);
+		}
+		if (ImGui.IsItemHovered())
+		{
+			ImGui.SetTooltip("チェックを外すと計測を停止し、パーティオーバーレイを非表示にします。設定画面と保存済み履歴は引き続き利用できます。");
+		}
+		ImGui.TextColored(
+			configuration.IsEnabled ? new Vector4(0.3f, 0.85f, 0.55f, 1f) : new Vector4(1f, 0.65f, 0.25f, 1f),
+			configuration.IsEnabled ? "状態: 有効" : "状態: 無効（戦闘データを取得しません）");
+
+		ImGui.Spacing();
 		DrawSectionTitle("動作モード", "コンテンツリプレイ再生時のパーティ識別方法を設定します。");
 		bool replayMode = configuration.ReplayMode;
 		if (ImGui.Checkbox("コンテンツリプレイ動作モード", ref replayMode))
@@ -1095,7 +1110,9 @@ public sealed class MainWindow : Window, IDisposable
 
 	private static void DrawIncomingCards(IReadOnlyList<IncomingRowData> rows)
 	{
-		List<IncomingRowData> hits = rows.Where(row => row.DamageEvent.Amount > 0).ToList();
+		List<IncomingRowData> hits = rows
+			.Where(row => row.DamageEvent.SourceEntityId != 0 || row.DamageEvent.ActionId != 0)
+			.ToList();
 		long total = hits.Sum(row => (long)row.DamageEvent.Amount);
 		IncomingRowData? maximum = hits.OrderByDescending(row => row.DamageEvent.Amount).FirstOrDefault();
 		string commonAction = hits

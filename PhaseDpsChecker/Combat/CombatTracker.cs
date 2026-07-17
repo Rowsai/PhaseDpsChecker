@@ -66,6 +66,7 @@ public sealed class CombatTracker : IDisposable
 	public string? CaptureError { get; }
 
 	public bool IsDisabledForPvP => clientState.IsPvP;
+	public bool IsEnabled => configuration.IsEnabled;
 
 	public PhaseDetectionPreset ActivePreset => configuration.PhaseDetectionPreset;
 
@@ -105,7 +106,7 @@ public sealed class CombatTracker : IDisposable
 		Roster = new PartyRoster(configuration, partyList, objectTable);
 		try
 		{
-			capture = new ActionEffectCapture(interopProvider, log);
+			capture = new ActionEffectCapture(interopProvider, log, configuration.IsEnabled);
 			CaptureAvailable = true;
 		}
 		catch (Exception ex)
@@ -183,6 +184,37 @@ public sealed class CombatTracker : IDisposable
 		ResetEncounterDetection();
 	}
 
+	public void SetPluginEnabled(bool enabled)
+	{
+		if (configuration.IsEnabled == enabled)
+		{
+			return;
+		}
+
+		if (!enabled)
+		{
+			capture?.SetEnabled(false);
+			configuration.IsEnabled = false;
+			if (Aggregator.Phases.Count > 0)
+			{
+				ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
+			}
+			else
+			{
+				configuration.Save();
+				ResetEncounterDetection();
+				DrainPendingCapture();
+			}
+			return;
+		}
+
+		configuration.IsEnabled = true;
+		configuration.Save();
+		ResetEncounterDetection();
+		DrainPendingCapture();
+		capture?.SetEnabled(true);
+	}
+
 	public void ArchiveCurrentForHistory()
 	{
 		ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
@@ -213,6 +245,11 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnFrameworkUpdate(IFramework frameworkContext)
 	{
+		if (!configuration.IsEnabled)
+		{
+			DrainPendingCapture();
+			return;
+		}
 		if (clientState.IsPvP)
 		{
 			if (Aggregator.CurrentPhase != null)
@@ -285,7 +322,7 @@ public sealed class CombatTracker : IDisposable
 		bool hasOutgoingDamage = isPartySource && rawAction.Effects.Any((EffectSample effect) => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId));
 		bool hasDirectPartyMemberOutgoingDamage = memberIds.Contains(rawAction.SourceEntityId) && hasOutgoingDamage;
 		List<IGrouping<uint, EffectSample>> incomingGroups = (from effect in rawAction.Effects
-			where effect.Damage != 0 && memberIds.Contains(effect.TargetEntityId) && !isPartySource
+			where (effect.IsDamageEffect || effect.Damage != 0) && memberIds.Contains(effect.TargetEntityId) && !isPartySource
 			group effect by effect.TargetEntityId).ToList();
 		(string actionName, ActionKind kind, bool isGcd, double gcdDurationSeconds, bool isOffensiveGcd) = ResolveAction(rawAction.ActionId);
 		if (isPartySource)
@@ -575,6 +612,10 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnChatMessage(IHandleableChatMessage message)
 	{
+		if (!configuration.IsEnabled)
+		{
+			return;
+		}
 		string text = message.Message.TextValue;
 		if (!string.IsNullOrWhiteSpace(text))
 		{
@@ -745,6 +786,10 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnTerritoryChanged(uint _)
 	{
+		if (!configuration.IsEnabled)
+		{
+			return;
+		}
 		EndPhase(DateTime.UtcNow);
 		periodicAttributions.Clear();
 		ResetEncounterDetection();
@@ -752,12 +797,19 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnDutyWiped(IDutyStateEventArgs _)
 	{
+		if (!configuration.IsEnabled)
+		{
+			return;
+		}
 		ArchiveCurrentCombat(CombatHistoryEndReason.Wipe);
 	}
 
 	private void OnDutyCompleted(IDutyStateEventArgs _)
 	{
-		dutyCompletionPending = true;
+		if (configuration.IsEnabled)
+		{
+			dutyCompletionPending = true;
+		}
 	}
 
 	private void CompleteDuty(IReadOnlyDictionary<uint, string> members, DateTime now)

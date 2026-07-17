@@ -88,7 +88,7 @@ public sealed class CombatAggregator
 	public void RecordIncomingDamage(IncomingDamageEvent damageEvent, IReadOnlySet<uint> currentPartyEntityIds)
 	{
 		PhaseRecord currentPhase = CurrentPhase;
-		if (currentPhase == null || damageEvent.Amount == 0 || !currentPartyEntityIds.Contains(damageEvent.PlayerEntityId))
+		if (currentPhase == null || !currentPartyEntityIds.Contains(damageEvent.PlayerEntityId))
 		{
 			return;
 		}

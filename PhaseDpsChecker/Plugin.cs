@@ -66,13 +66,14 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	public Plugin()
 	{
 		Configuration = (PluginInterface.GetPluginConfig() as Configuration) ?? new Configuration();
-		if (Configuration.Version < 6)
+		if (Configuration.Version < 7)
 		{
 			if (Configuration.MaxEncounterHistory <= 0)
 			{
 				Configuration.MaxEncounterHistory = 20;
 			}
-			Configuration.Version = 6;
+			Configuration.IsEnabled = true;
+			Configuration.Version = 7;
 			Configuration.Save();
 		}
 		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, ChatGui, GameInteropProvider, Log);
@@ -119,7 +120,7 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 			mainWindow.IsOpen = true;
 		}
 		lastHistoryFileSizeLevel = currentHistoryFileSizeLevel;
-		partyOverlayWindow.IsOpen = Configuration.ShowPartyOverlay;
+		partyOverlayWindow.IsOpen = Configuration.IsEnabled && Configuration.ShowPartyOverlay;
 		windowSystem.Draw();
 	}
 }

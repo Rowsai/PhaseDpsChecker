@@ -21,23 +21,55 @@ public sealed class ActionEffectCapture : IDisposable
 	private readonly Hook<ActionEffectHandler.Delegates.Receive> receiveHook;
 
 	private readonly Hook<PacketDispatcher.Delegates.HandleActorControlPacket> actorControlHook;
+	private bool enabled;
 
-	public unsafe ActionEffectCapture(IGameInteropProvider interopProvider, IPluginLog log)
+	public unsafe ActionEffectCapture(IGameInteropProvider interopProvider, IPluginLog log, bool enabled)
 	{
 		this.log = log;
 		receiveHook = interopProvider.HookFromAddress<ActionEffectHandler.Delegates.Receive>(ActionEffectHandler.MemberFunctionPointers.Receive, OnReceiveActionEffect);
-		receiveHook.Enable();
+		Hook<PacketDispatcher.Delegates.HandleActorControlPacket>? createdActorControlHook = null;
 		try
 		{
-			actorControlHook = interopProvider.HookFromAddress<PacketDispatcher.Delegates.HandleActorControlPacket>((nint)PacketDispatcher.MemberFunctionPointers.HandleActorControlPacket, OnActorControl);
-			actorControlHook.Enable();
+			createdActorControlHook = interopProvider.HookFromAddress<PacketDispatcher.Delegates.HandleActorControlPacket>((nint)PacketDispatcher.MemberFunctionPointers.HandleActorControlPacket, OnActorControl);
+			actorControlHook = createdActorControlHook;
+			SetEnabled(enabled);
 		}
 		catch
 		{
-			receiveHook.Disable();
+			if (this.enabled)
+			{
+				receiveHook.Disable();
+			}
+			createdActorControlHook?.Dispose();
 			receiveHook.Dispose();
 			throw;
 		}
+	}
+
+	public void SetEnabled(bool shouldEnable)
+	{
+		if (enabled == shouldEnable)
+		{
+			return;
+		}
+		if (shouldEnable)
+		{
+			receiveHook.Enable();
+			try
+			{
+				actorControlHook.Enable();
+			}
+			catch
+			{
+				receiveHook.Disable();
+				throw;
+			}
+			enabled = true;
+			return;
+		}
+		actorControlHook.Disable();
+		receiveHook.Disable();
+		enabled = false;
 	}
 
 	public bool TryDequeue(out RawActionEvent? actionEvent)
@@ -52,9 +84,13 @@ public sealed class ActionEffectCapture : IDisposable
 
 	public void Dispose()
 	{
-		actorControlHook.Disable();
+		if (enabled)
+		{
+			actorControlHook.Disable();
+			receiveHook.Disable();
+			enabled = false;
+		}
 		actorControlHook.Dispose();
-		receiveHook.Disable();
 		receiveHook.Dispose();
 	}
 
@@ -88,7 +124,7 @@ public sealed class ActionEffectCapture : IDisposable
 						bool flag = ((type == 3 || (uint)(type - 5) <= 1u) ? true : false);
 						uint num2 = (flag ? num : 0u);
 						uint num3 = ((type == 4) ? num : 0u);
-						if (num2 != 0 || num3 != 0)
+						if (flag || num3 != 0)
 						{
 							List<EffectSample> list3 = list;
 							uint targetEntityId2 = objectId;
@@ -96,7 +132,7 @@ public sealed class ActionEffectCapture : IDisposable
 							uint healing = num3;
 							flag = ((type == 4) ? ((reference.Param1 & 0x20) != 0) : ((reference.Param0 & 0x20) != 0));
 							bool flag2 = ((type == 3 || (uint)(type - 5) <= 1u) ? true : false);
-							list3.Add(new EffectSample(targetEntityId2, damage, healing, flag, flag2 && (reference.Param0 & 0x40) != 0));
+							list3.Add(new EffectSample(targetEntityId2, damage, healing, flag, flag2 && (reference.Param0 & 0x40) != 0, flag2));
 						}
 					}
 				}
