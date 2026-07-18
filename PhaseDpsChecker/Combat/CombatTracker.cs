@@ -37,6 +37,7 @@ public sealed class CombatTracker : IDisposable
 
 	private readonly ActionEffectCapture? capture;
 	private readonly CombatHistoryStore historyStore;
+	private readonly RaidBuffContributionCalculator raidBuffCalculator;
 
 	private readonly FuturesRewrittenPhaseController futuresRewrittenController = new();
 
@@ -56,6 +57,8 @@ public sealed class CombatTracker : IDisposable
 	private DateTime? nextDedicatedPhaseAttackAfter;
 
 	private bool dutyCompletionPending;
+	private uint lastContentFinderConditionId = uint.MaxValue;
+	private string currentContentName = "通常コンテンツ";
 
 	public CombatAggregator Aggregator { get; }
 
@@ -75,6 +78,7 @@ public sealed class CombatTracker : IDisposable
 	public string HistoryFilePath => historyStore.FilePath;
 
 	public string? HistoryPersistenceError => historyStore.LastError;
+	public string CurrentContentName => currentContentName;
 
 	public HistoryFileSizeStatus HistoryFileSizeStatus => HistoryFileSizeMonitor.Read(HistoryFilePath);
 
@@ -104,6 +108,7 @@ public sealed class CombatTracker : IDisposable
 			historyStore.Save(Aggregator.Histories);
 		}
 		Roster = new PartyRoster(configuration, partyList, objectTable);
+		raidBuffCalculator = new RaidBuffContributionCalculator(dataManager, objectTable, Roster);
 		try
 		{
 			capture = new ActionEffectCapture(interopProvider, log, configuration.IsEnabled);
@@ -236,6 +241,16 @@ public sealed class CombatTracker : IDisposable
 		return true;
 	}
 
+	public int DeleteArchivedHistories(IEnumerable<int> historyNumbers)
+	{
+		int removed = Aggregator.RemoveArchivedHistories(historyNumbers);
+		if (removed > 0)
+		{
+			historyStore.Save(Aggregator.Histories);
+		}
+		return removed;
+	}
+
 	public void SetHistoryDirectory(string directory)
 	{
 		configuration.HistoryDirectory = directory ?? string.Empty;
@@ -245,6 +260,7 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnFrameworkUpdate(IFramework frameworkContext)
 	{
+		RefreshPhaseDetectionPreset();
 		if (!configuration.IsEnabled)
 		{
 			DrainPendingCapture();
@@ -358,7 +374,16 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (isPartySource)
 		{
+			PlayerPhaseStatistics player = Aggregator.CurrentPhase!.EnsurePlayer(partyOwnerId, playerName);
+			List<(EffectSample Effect, RaidBuffContribution Contribution)> raidContributions = rawAction.Effects
+				.Where(effect => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId))
+				.Select(effect => (effect, raidBuffCalculator.Calculate(rawAction.SourceEntityId, partyOwnerId, effect.TargetEntityId, effect, player, members)))
+				.ToList();
 			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, partyOwnerId, playerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects, isOffensiveGcd), memberIds);
+			foreach ((EffectSample effect, RaidBuffContribution contribution) in raidContributions)
+			{
+				Aggregator.RecordRaidContribution(partyOwnerId, effect, contribution, members);
+			}
 			if (hasOutgoingDamage && ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
 			{
 				lastPartyDamageAt = rawAction.Timestamp;
@@ -464,7 +489,15 @@ public sealed class CombatTracker : IDisposable
 		string actionName = value?.ActionName ?? text;
 		ActionKind kind = value?.Kind ?? ActionKind.Other;
 		EffectSample item = new EffectSample(periodicEvent.TargetEntityId, (!periodicEvent.IsHealing) ? periodicEvent.Amount : 0u, periodicEvent.IsHealing ? periodicEvent.Amount : 0u, Critical: false, DirectHit: false);
+		PlayerPhaseStatistics periodicPlayer = Aggregator.CurrentPhase!.EnsurePlayer(num, value2);
+		RaidBuffContribution periodicContribution = flag2
+			? raidBuffCalculator.Calculate(num, num, periodicEvent.TargetEntityId, item, periodicPlayer, members)
+			: RaidBuffContribution.Empty;
 		Aggregator.RecordAction(new CombatActionEvent(periodicEvent.Timestamp, num, value2, actionId, actionName, kind, CountsAsUse: false, IsGcd: false, 0.0, [item]), memberIds);
+		if (flag2)
+		{
+			Aggregator.RecordRaidContribution(num, item, periodicContribution, members);
+		}
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 		{
 			if (flag2 && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
@@ -786,6 +819,7 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnTerritoryChanged(uint _)
 	{
+		lastContentFinderConditionId = uint.MaxValue;
 		if (!configuration.IsEnabled)
 		{
 			return;
@@ -793,6 +827,34 @@ public sealed class CombatTracker : IDisposable
 		EndPhase(DateTime.UtcNow);
 		periodicAttributions.Clear();
 		ResetEncounterDetection();
+	}
+
+	private void RefreshPhaseDetectionPreset()
+	{
+		uint contentId = dutyState.ContentFinderCondition.RowId;
+		if (contentId == lastContentFinderConditionId)
+		{
+			return;
+		}
+		lastContentFinderConditionId = contentId;
+		string contentName = "通常コンテンツ";
+		if (contentId != 0)
+		{
+			try
+			{
+				string resolvedName = dutyState.ContentFinderCondition.Value.Name.ToString();
+				if (!string.IsNullOrWhiteSpace(resolvedName))
+				{
+					contentName = resolvedName;
+				}
+			}
+			catch (Exception ex)
+			{
+				log.Warning(ex, "コンテンツ情報を取得できませんでした。通常計測を使用します。");
+			}
+		}
+		currentContentName = contentName;
+		SetPhaseDetectionPreset(PhaseDetectionPresetCatalog.Resolve(contentName));
 	}
 
 	private void OnDutyWiped(IDutyStateEventArgs _)

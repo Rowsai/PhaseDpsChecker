@@ -109,6 +109,11 @@ internal sealed class CombatHistoryStore
 				player.RestoreState(
 					savedPlayer.TotalDamage,
 					savedPlayer.TotalHealing,
+					savedPlayer.ExternalBuffDamageReceived,
+					savedPlayer.RaidBuffDamageGranted,
+					savedPlayer.UnbuffedHitCount,
+					savedPlayer.UnbuffedCriticalHits,
+					savedPlayer.UnbuffedDirectHits,
 					savedPlayer.DamageHitCount,
 					savedPlayer.CriticalDamageHits,
 					savedPlayer.DirectDamageHits,
@@ -203,6 +208,11 @@ internal sealed class CombatHistoryStore
 		public string PlayerName { get; set; } = string.Empty;
 		public long TotalDamage { get; set; }
 		public long TotalHealing { get; set; }
+		public double ExternalBuffDamageReceived { get; set; }
+		public double RaidBuffDamageGranted { get; set; }
+		public int UnbuffedHitCount { get; set; }
+		public int UnbuffedCriticalHits { get; set; }
+		public int UnbuffedDirectHits { get; set; }
 		public int DamageHitCount { get; set; }
 		public int CriticalDamageHits { get; set; }
 		public int DirectDamageHits { get; set; }
@@ -220,6 +230,11 @@ internal sealed class CombatHistoryStore
 			PlayerName = player.PlayerName,
 			TotalDamage = player.TotalDamage,
 			TotalHealing = player.TotalHealing,
+			ExternalBuffDamageReceived = player.ExternalBuffDamageReceived,
+			RaidBuffDamageGranted = player.RaidBuffDamageGranted,
+			UnbuffedHitCount = player.UnbuffedHitCount,
+			UnbuffedCriticalHits = player.UnbuffedCriticalHits,
+			UnbuffedDirectHits = player.UnbuffedDirectHits,
 			DamageHitCount = player.DamageHitCount,
 			CriticalDamageHits = player.CriticalDamageHits,
 			DirectDamageHits = player.DirectDamageHits,

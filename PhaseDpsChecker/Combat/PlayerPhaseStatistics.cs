@@ -17,6 +17,16 @@ public sealed class PlayerPhaseStatistics
 
 	public long TotalHealing { get; private set; }
 
+	public double ExternalBuffDamageReceived { get; private set; }
+
+	public double RaidBuffDamageGranted { get; private set; }
+
+	public int UnbuffedHitCount { get; private set; }
+
+	public int UnbuffedCriticalHits { get; private set; }
+
+	public int UnbuffedDirectHits { get; private set; }
+
 	public int DamageHitCount { get; private set; }
 
 	public int CriticalDamageHits { get; private set; }
@@ -42,6 +52,12 @@ public sealed class PlayerPhaseStatistics
 	public double DirectHitRate => DamageRate(DirectDamageHits);
 
 	public double CriticalDirectHitRate => DamageRate(CriticalDirectDamageHits);
+
+	public double RaidAdjustedDamage => TotalDamage - ExternalBuffDamageReceived + RaidBuffDamageGranted;
+
+	internal double EstimatedUnbuffedCriticalChance => Math.Clamp((UnbuffedCriticalHits + 5.0) / (UnbuffedHitCount + 20.0), 0.05, 0.95);
+
+	internal double EstimatedUnbuffedDirectHitChance => Math.Clamp((UnbuffedDirectHits + 4.0) / (UnbuffedHitCount + 20.0), 0.05, 0.95);
 
 	public PlayerPhaseStatistics(uint entityId, string playerName)
 	{
@@ -110,6 +126,28 @@ public sealed class PlayerPhaseStatistics
 		action.AddHealing(effect);
 	}
 
+	internal void AddRaidAdjustment(double externalBuffDamageReceived, double raidBuffDamageGranted)
+	{
+		ExternalBuffDamageReceived += Math.Max(0.0, externalBuffDamageReceived);
+		RaidBuffDamageGranted += Math.Max(0.0, raidBuffDamageGranted);
+	}
+
+	internal void AddUnbuffedObservation(EffectSample effect, bool hasExternalCriticalBuff, bool hasExternalDirectHitBuff)
+	{
+		if (!hasExternalCriticalBuff && !hasExternalDirectHitBuff)
+		{
+			UnbuffedHitCount++;
+			if (effect.Critical)
+			{
+				UnbuffedCriticalHits++;
+			}
+			if (effect.DirectHit)
+			{
+				UnbuffedDirectHits++;
+			}
+		}
+	}
+
 	internal void AddGcdInterval(DateTime timestamp, double durationSeconds, bool countsAsDamage, bool countsAsHealing)
 	{
 		double value = Math.Clamp(durationSeconds, 0.1, 10.0);
@@ -134,6 +172,11 @@ public sealed class PlayerPhaseStatistics
 		return 0.0;
 	}
 
+	public double Rdps(double phaseDurationSeconds)
+	{
+		return phaseDurationSeconds > 0.0 ? RaidAdjustedDamage / phaseDurationSeconds : 0.0;
+	}
+
 	public double ActiveRate(DateTime phaseStart, DateTime phaseEnd)
 	{
 		return ActiveRate(gcdIntervals, phaseStart, phaseEnd);
@@ -142,6 +185,11 @@ public sealed class PlayerPhaseStatistics
 	internal void RestoreState(
 		long totalDamage,
 		long totalHealing,
+		double externalBuffDamageReceived,
+		double raidBuffDamageGranted,
+		int unbuffedHitCount,
+		int unbuffedCriticalHits,
+		int unbuffedDirectHits,
 		int damageHitCount,
 		int criticalDamageHits,
 		int directDamageHits,
@@ -154,6 +202,11 @@ public sealed class PlayerPhaseStatistics
 	{
 		TotalDamage = totalDamage;
 		TotalHealing = totalHealing;
+		ExternalBuffDamageReceived = externalBuffDamageReceived;
+		RaidBuffDamageGranted = raidBuffDamageGranted;
+		UnbuffedHitCount = unbuffedHitCount;
+		UnbuffedCriticalHits = unbuffedCriticalHits;
+		UnbuffedDirectHits = unbuffedDirectHits;
 		DamageHitCount = damageHitCount;
 		CriticalDamageHits = criticalDamageHits;
 		DirectDamageHits = directDamageHits;

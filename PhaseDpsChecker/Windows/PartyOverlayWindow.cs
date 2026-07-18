@@ -18,18 +18,21 @@ public sealed class PartyOverlayWindow : Window
 		| ImGuiTableFlags.SizingStretchProp;
 
 	private readonly CombatTracker tracker;
+	private readonly Configuration configuration;
 
 	private sealed record OverlayRow(
 		PhaseRecord Phase,
 		PlayerPhaseStatistics Player,
 		double Dps,
+		double Rdps,
 		double ActiveRate,
 		double DamageActiveRate,
 		double HealingActiveRate);
 
-	public PartyOverlayWindow(CombatTracker tracker)
+	public PartyOverlayWindow(Configuration configuration, CombatTracker tracker)
 		: base("Phase DPS Checker Overlay###PhaseDpsCheckerPartyOverlay", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
 	{
+		this.configuration = configuration;
 		this.tracker = tracker;
 		ShowCloseButton = false;
 		RespectCloseHotkey = false;
@@ -71,8 +74,9 @@ public sealed class PartyOverlayWindow : Window
 		List<OverlayRow> rows = currentPhase.Players.Values
 			.Select(player => new OverlayRow(
 				currentPhase,
-				player,
-				player.Dps(currentPhase.DurationSeconds(now)),
+					player,
+					player.Dps(currentPhase.DurationSeconds(now)),
+					player.Rdps(currentPhase.DurationSeconds(now)),
 				player.ActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now)),
 				player.DamageActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now)),
 				player.HealingActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now))))
@@ -82,28 +86,56 @@ public sealed class PartyOverlayWindow : Window
 
 		DrawMetrics(currentPhase, rows, now);
 		ImGui.Spacing();
-		if (!ImGui.BeginTable("##PartyOverlayTable", 12, TableFlags, new Vector2(0f, -1f)))
+		List<SummaryDisplayColumn> columns = SummaryDisplayColumnCatalog.All.Where(configuration.IsSummaryColumnVisible).ToList();
+		if (columns.Count == 0)
+		{
+			ImGui.TextDisabled("設定タブで表示項目を1つ以上選択してください。");
+			return;
+		}
+		if (!ImGui.BeginTable("##PartyOverlayTable", columns.Count, TableFlags, new Vector2(0f, -1f)))
 		{
 			return;
 		}
 
-		SetupColumns();
+		SetupColumns(columns);
 		ImGui.TableHeadersRow();
 		double maximumDps = rows.Count == 0 ? 0 : rows.Max(row => row.Dps);
+		double maximumRdps = rows.Count == 0 ? 0 : rows.Max(row => row.Rdps);
 		foreach (OverlayRow row in rows)
 		{
-			DrawRow(row, encounterStart, now, maximumDps);
+			DrawRow(row, encounterStart, now, maximumDps, maximumRdps, columns);
 		}
 		ImGui.EndTable();
 	}
 
-	private void DrawRow(OverlayRow row, DateTime encounterStart, DateTime now, double maximumDps)
+	private void DrawRow(OverlayRow row, DateTime encounterStart, DateTime now, double maximumDps, double maximumRdps, IReadOnlyList<SummaryDisplayColumn> columns)
 	{
 		ImGui.TableNextRow();
-		TextColumn(0, row.Phase.IsActive ? $"{row.Phase.Number} (計測中)" : row.Phase.Number.ToString());
+		for (int index = 0; index < columns.Count; index++)
+		{
+			switch (columns[index])
+			{
+				case SummaryDisplayColumn.Phase: TextColumn(index, row.Phase.IsActive ? $"{row.Phase.Number} (計測中)" : row.Phase.Number.ToString()); break;
+				case SummaryDisplayColumn.Player: DrawPlayerColumn(index, row.Player); break;
+				case SummaryDisplayColumn.Start: TextColumn(index, FormatElapsed(row.Phase.StartedAt, encounterStart)); break;
+				case SummaryDisplayColumn.End: TextColumn(index, row.Phase.EndedAt.HasValue ? FormatElapsed(row.Phase.EndedAt.Value, encounterStart) : $"{FormatElapsed(now, encounterStart)} (計測中)"); break;
+				case SummaryDisplayColumn.Dps: ProgressColumn(index, row.Dps, maximumDps, row.Dps.ToString("N1"), new Vector4(0.05f, 0.52f, 0.86f, 0.9f)); break;
+				case SummaryDisplayColumn.Rdps: ProgressColumn(index, row.Rdps, maximumRdps, row.Rdps.ToString("N1"), new Vector4(0.55f, 0.38f, 0.95f, 0.9f)); break;
+				case SummaryDisplayColumn.Critical: TextColumn(index, Percent(row.Player.CriticalRate)); break;
+				case SummaryDisplayColumn.DirectHit: TextColumn(index, Percent(row.Player.DirectHitRate)); break;
+				case SummaryDisplayColumn.CriticalDirectHit: TextColumn(index, Percent(row.Player.CriticalDirectHitRate)); break;
+				case SummaryDisplayColumn.MaximumDamage: TextColumn(index, row.Player.MaximumDamage == 0 ? "-" : $"{row.Player.MaximumDamage:N0} / {row.Player.MaximumDamageAction}"); break;
+				case SummaryDisplayColumn.Active: ProgressColumn(index, row.ActiveRate, 1.0, Percent(row.ActiveRate), new Vector4(0.06f, 0.72f, 0.68f, 0.9f)); break;
+				case SummaryDisplayColumn.DamageActive: ProgressColumn(index, row.DamageActiveRate, 1.0, Percent(row.DamageActiveRate), new Vector4(0.08f, 0.55f, 0.95f, 0.9f)); break;
+				case SummaryDisplayColumn.HealingActive: ProgressColumn(index, row.HealingActiveRate, 1.0, Percent(row.HealingActiveRate), new Vector4(0.2f, 0.82f, 0.55f, 0.9f)); break;
+			}
+		}
+	}
 
-		ImGui.TableSetColumnIndex(1);
-		uint jobId = tracker.Roster.GetJobId(row.Player.EntityId);
+	private void DrawPlayerColumn(int column, PlayerPhaseStatistics player)
+	{
+		ImGui.TableSetColumnIndex(column);
+		uint jobId = tracker.Roster.GetJobId(player.EntityId);
 		if (jobId != 0)
 		{
 			uint jobIconId = 62100u + jobId;
@@ -112,20 +144,7 @@ public sealed class PartyOverlayWindow : Window
 			ImGui.Image(iconTexture.Handle, new Vector2(iconSize, iconSize));
 			ImGui.SameLine(0f, 5f);
 		}
-		ImGui.TextUnformatted(row.Player.PlayerName);
-
-		TextColumn(2, FormatElapsed(row.Phase.StartedAt, encounterStart));
-		TextColumn(3, row.Phase.EndedAt.HasValue
-			? FormatElapsed(row.Phase.EndedAt.Value, encounterStart)
-			: $"{FormatElapsed(now, encounterStart)} (計測中)");
-		ProgressColumn(4, row.Dps, maximumDps, row.Dps.ToString("N1"), new Vector4(0.05f, 0.52f, 0.86f, 0.9f));
-		TextColumn(5, Percent(row.Player.CriticalRate));
-		TextColumn(6, Percent(row.Player.DirectHitRate));
-		TextColumn(7, Percent(row.Player.CriticalDirectHitRate));
-		TextColumn(8, row.Player.MaximumDamage == 0 ? "-" : $"{row.Player.MaximumDamage:N0} / {row.Player.MaximumDamageAction}");
-		ProgressColumn(9, row.ActiveRate, 1.0, Percent(row.ActiveRate), new Vector4(0.06f, 0.72f, 0.68f, 0.9f));
-		ProgressColumn(10, row.DamageActiveRate, 1.0, Percent(row.DamageActiveRate), new Vector4(0.08f, 0.55f, 0.95f, 0.9f));
-		ProgressColumn(11, row.HealingActiveRate, 1.0, Percent(row.HealingActiveRate), new Vector4(0.2f, 0.82f, 0.55f, 0.9f));
+		ImGui.TextUnformatted(player.PlayerName);
 	}
 
 	private static void DrawMetrics(PhaseRecord currentPhase, IReadOnlyList<OverlayRow> rows, DateTime now)
@@ -159,20 +178,12 @@ public sealed class PartyOverlayWindow : Window
 		}
 	}
 
-	private static void SetupColumns()
+	private static void SetupColumns(IEnumerable<SummaryDisplayColumn> columns)
 	{
-		ImGui.TableSetupColumn("Phase");
-		ImGui.TableSetupColumn("プレイヤー名");
-		ImGui.TableSetupColumn("開始時間");
-		ImGui.TableSetupColumn("終了時間");
-		ImGui.TableSetupColumn("DPS");
-		ImGui.TableSetupColumn("Crit %");
-		ImGui.TableSetupColumn("DH %");
-		ImGui.TableSetupColumn("Crit + DH %");
-		ImGui.TableSetupColumn("最大ダメージ / アクション");
-		ImGui.TableSetupColumn("Active %");
-		ImGui.TableSetupColumn("D / Active %");
-		ImGui.TableSetupColumn("H / Active %");
+		foreach (SummaryDisplayColumn column in columns)
+		{
+			ImGui.TableSetupColumn(column.DisplayName());
+		}
 	}
 
 	private static void TextColumn(int column, string text)

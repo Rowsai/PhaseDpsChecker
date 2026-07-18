@@ -96,6 +96,30 @@ public sealed class CombatAggregator
 		currentPhase.AddIncomingDamage(damageEvent);
 	}
 
+	public void RecordRaidContribution(
+		uint attackerEntityId,
+		EffectSample effect,
+		RaidBuffContribution contribution,
+		IReadOnlyDictionary<uint, string> currentPartyMembers)
+	{
+		PhaseRecord? currentPhase = CurrentPhase;
+		if (currentPhase == null || !currentPartyMembers.TryGetValue(attackerEntityId, out string? attackerName))
+		{
+			return;
+		}
+
+		PlayerPhaseStatistics attacker = currentPhase.EnsurePlayer(attackerEntityId, attackerName);
+		attacker.AddRaidAdjustment(contribution.ExternalDamageReceived, 0.0);
+		attacker.AddUnbuffedObservation(effect, contribution.HasExternalCriticalBuff, contribution.HasExternalDirectHitBuff);
+		foreach (KeyValuePair<uint, double> granted in contribution.DamageGrantedByProvider)
+		{
+			if (currentPartyMembers.TryGetValue(granted.Key, out string? providerName))
+			{
+				currentPhase.EnsurePlayer(granted.Key, providerName).AddRaidAdjustment(0.0, granted.Value);
+			}
+		}
+	}
+
 	public void RecordInterruptedCast(uint entityId, string playerName, uint actionId, string actionName, ActionKind kind, bool isHealingAction)
 	{
 		PhaseRecord currentPhase = CurrentPhase;
@@ -181,5 +205,11 @@ public sealed class CombatAggregator
 		}
 		histories.RemoveAt(index);
 		return true;
+	}
+
+	public int RemoveArchivedHistories(IEnumerable<int> historyNumbers)
+	{
+		HashSet<int> selected = historyNumbers.ToHashSet();
+		return histories.RemoveAll(history => selected.Contains(history.Number));
 	}
 }
