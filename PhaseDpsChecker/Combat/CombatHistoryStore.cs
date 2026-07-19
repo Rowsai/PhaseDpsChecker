@@ -153,7 +153,7 @@ internal sealed class CombatHistoryStore
 					incoming.ActionId,
 					incoming.ActionName,
 					incoming.Amount,
-					incoming.Statuses.Select(status => new CombatStatusSnapshot(status.StatusId, status.Name, status.StackCount, status.RemainingSeconds)).ToArray()));
+					incoming.Statuses.Select(status => new CombatStatusSnapshot(status.StatusId, status.Name, status.StackCount, status.RemainingSeconds, status.Side, status.Kind)).ToArray()));
 			}
 			phases.Add(phase);
 		}
@@ -324,13 +324,17 @@ internal sealed class CombatHistoryStore
 		public string Name { get; set; } = string.Empty;
 		public ushort StackCount { get; set; }
 		public float RemainingSeconds { get; set; }
+		public CombatStatusSide Side { get; set; }
+		public CombatStatusKind Kind { get; set; }
 
 		public static StatusDto From(CombatStatusSnapshot status) => new()
 		{
 			StatusId = status.StatusId,
 			Name = status.Name,
 			StackCount = status.Stacks,
-			RemainingSeconds = status.RemainingSeconds
+			RemainingSeconds = status.RemainingSeconds,
+			Side = status.Side,
+			Kind = status.Kind
 		};
 	}
 }

@@ -13,6 +13,10 @@ namespace PhaseDpsChecker.Combat;
 
 public sealed class CombatTracker : IDisposable
 {
+	private const uint PeriodicActionMask = 0x80000000u;
+	private const uint LimitBreakEntityId = 0xFFFFFFFEu;
+	private const string LimitBreakPlayerName = "LIMIT BREAK";
+
 	private readonly record struct PeriodicKey(uint OwnerEntityId, uint TargetEntityId, uint StatusId);
 
 	private sealed record PeriodicAttribution(uint OwnerEntityId, uint ActionId, string ActionName, ActionKind Kind, DateTime AppliedAt);
@@ -57,6 +61,7 @@ public sealed class CombatTracker : IDisposable
 	private DateTime? nextDedicatedPhaseAttackAfter;
 
 	private bool dutyCompletionPending;
+	private int? betaPendingPhaseStart;
 	private uint lastContentFinderConditionId = uint.MaxValue;
 	private string currentContentName = "通常コンテンツ";
 
@@ -83,7 +88,7 @@ public sealed class CombatTracker : IDisposable
 	public HistoryFileSizeStatus HistoryFileSizeStatus => HistoryFileSizeMonitor.Read(HistoryFilePath);
 
 	public string PhaseDetectionStatus => ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate
-		? futuresRewrittenController.StatusLabel
+		? futuresRewrittenController.StatusLabel + (configuration.FflogsAnalyzeBase ? " / FFLogs Analyze Base β" : string.Empty)
 		: Aggregator.CurrentPhase == null ? "通常計測：開始待ち" : "通常計測：計測中";
 
 	public CombatTracker(Configuration configuration, IFramework framework, IDataManager dataManager, IObjectTable objectTable, IPartyList partyList, IDutyState dutyState, ICondition condition, IClientState clientState, IChatGui chatGui, IGameInteropProvider interopProvider, IPluginLog log)
@@ -185,6 +190,21 @@ public sealed class CombatTracker : IDisposable
 		}
 		configuration.ReplayMode = enabled;
 		configuration.SelectedEntityId = 0;
+		configuration.Save();
+		ResetEncounterDetection();
+	}
+
+	public void SetFflogsAnalyzeBase(bool enabled)
+	{
+		if (configuration.FflogsAnalyzeBase == enabled)
+		{
+			return;
+		}
+		if (Aggregator.Phases.Count > 0)
+		{
+			ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
+		}
+		configuration.FflogsAnalyzeBase = enabled;
 		configuration.Save();
 		ResetEncounterDetection();
 	}
@@ -340,7 +360,7 @@ public sealed class CombatTracker : IDisposable
 		List<IGrouping<uint, EffectSample>> incomingGroups = (from effect in rawAction.Effects
 			where (effect.IsDamageEffect || effect.Damage != 0) && memberIds.Contains(effect.TargetEntityId) && !isPartySource
 			group effect by effect.TargetEntityId).ToList();
-		(string actionName, ActionKind kind, bool isGcd, double gcdDurationSeconds, bool isOffensiveGcd) = ResolveAction(rawAction.ActionId);
+		(string actionName, ActionKind kind, bool isGcd, double gcdDurationSeconds, bool isOffensiveGcd, bool isLimitBreak) = ResolveAction(rawAction.ActionId);
 		if (isPartySource)
 		{
 			foreach (StatusApplication statusApplication in rawAction.StatusApplications)
@@ -350,7 +370,19 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (Aggregator.CurrentPhase == null)
 		{
-			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && hasDirectPartyMemberOutgoingDamage)
+			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && configuration.FflogsAnalyzeBase && betaPendingPhaseStart.HasValue && hasDirectPartyMemberOutgoingDamage)
+			{
+				uint firstTarget = ChooseTargetableAnchor(rawAction.Effects, memberIds);
+				if (firstTarget != 0)
+				{
+					int phaseNumber = betaPendingPhaseStart.Value;
+					betaPendingPhaseStart = null;
+					lastPartyDamageAt = null;
+					BeginPhase(rawAction.Timestamp, members, firstTarget);
+					log.Information("絶妖星乱舞 Phase {PhaseNumber} のFFLogs基準計測を最初の与ダメージから開始しました。", phaseNumber);
+				}
+			}
+			else if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && hasDirectPartyMemberOutgoingDamage)
 			{
 				uint firstTarget = ChooseTargetableAnchor(rawAction.Effects, memberIds);
 				if (firstTarget != 0 && (!nextDedicatedPhaseAttackAfter.HasValue || rawAction.Timestamp >= nextDedicatedPhaseAttackAfter.Value))
@@ -374,17 +406,29 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (isPartySource)
 		{
-			PlayerPhaseStatistics player = Aggregator.CurrentPhase!.EnsurePlayer(partyOwnerId, playerName);
-			List<(EffectSample Effect, RaidBuffContribution Contribution)> raidContributions = rawAction.Effects
-				.Where(effect => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId))
-				.Select(effect => (effect, raidBuffCalculator.Calculate(rawAction.SourceEntityId, partyOwnerId, effect.TargetEntityId, effect, player, members)))
-				.ToList();
-			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, partyOwnerId, playerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects, isOffensiveGcd), memberIds);
+			uint recordedEntityId = isLimitBreak ? LimitBreakEntityId : partyOwnerId;
+			string recordedPlayerName = isLimitBreak ? LimitBreakPlayerName : playerName;
+			IReadOnlyDictionary<uint, string> recordMembers = members;
+			IReadOnlySet<uint> recordMemberIds = memberIds;
+			if (isLimitBreak)
+			{
+				Dictionary<uint, string> withLimitBreak = new(members) { [LimitBreakEntityId] = LimitBreakPlayerName };
+				recordMembers = withLimitBreak;
+				recordMemberIds = withLimitBreak.Keys.ToHashSet();
+			}
+			PlayerPhaseStatistics player = Aggregator.CurrentPhase!.EnsurePlayer(recordedEntityId, recordedPlayerName);
+			List<(EffectSample Effect, RaidBuffContribution Contribution)> raidContributions = isLimitBreak
+				? new List<(EffectSample, RaidBuffContribution)>()
+				: rawAction.Effects
+					.Where(effect => effect.Damage != 0 && !memberIds.Contains(effect.TargetEntityId))
+					.Select(effect => (effect, raidBuffCalculator.Calculate(rawAction.SourceEntityId, partyOwnerId, effect.TargetEntityId, effect, player, members)))
+					.ToList();
+			Aggregator.RecordAction(new CombatActionEvent(rawAction.Timestamp, recordedEntityId, recordedPlayerName, rawAction.ActionId, actionName, kind, CountsAsUse: true, isGcd, gcdDurationSeconds, rawAction.Effects, isOffensiveGcd), recordMemberIds);
 			foreach ((EffectSample effect, RaidBuffContribution contribution) in raidContributions)
 			{
-				Aggregator.RecordRaidContribution(partyOwnerId, effect, contribution, members);
+				Aggregator.RecordRaidContribution(recordedEntityId, effect, contribution, recordMembers);
 			}
-			if (hasOutgoingDamage && ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
+			if (hasOutgoingDamage && ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 			{
 				lastPartyDamageAt = rawAction.Timestamp;
 			}
@@ -409,7 +453,7 @@ public sealed class CombatTracker : IDisposable
 					rawAction.ActionId,
 					incomingActionName,
 					(uint)Math.Min(total, uint.MaxValue),
-					SnapshotStatuses(group.Key)), memberIds);
+					SnapshotIncomingStatuses(group.Key, rawAction.SourceEntityId, members)), memberIds);
 			}
 		}
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
@@ -444,10 +488,10 @@ public sealed class CombatTracker : IDisposable
 				targetPlayerName,
 				periodicEvent.SourceEntityId,
 				ResolveGameObjectName(periodicEvent.SourceEntityId, "継続ダメージ"),
-				0x80000000u | periodicEvent.StatusId,
+				PeriodicActionMask | periodicEvent.StatusId,
 				$"{statusName} (DoT)",
 				periodicEvent.Amount,
-				SnapshotStatuses(periodicEvent.TargetEntityId)), memberIds);
+				SnapshotIncomingStatuses(periodicEvent.TargetEntityId, periodicEvent.SourceEntityId, members)), memberIds);
 			return;
 		}
 		PeriodicAttribution value = null;
@@ -484,10 +528,12 @@ public sealed class CombatTracker : IDisposable
 				return;
 			}
 		}
-		string text = ResolveStatusName(periodicEvent.StatusId) + (periodicEvent.IsHealing ? " (HoT)" : " (DoT)");
-		uint actionId = value?.ActionId ?? (0x80000000u | periodicEvent.StatusId);
-		string actionName = value?.ActionName ?? text;
-		ActionKind kind = value?.Kind ?? ActionKind.Other;
+		string periodicStatusName = ResolveStatusName(periodicEvent.StatusId);
+		uint actionId = PeriodicActionMask | periodicEvent.StatusId;
+		string actionName = value == null
+			? $"{periodicStatusName} ({(periodicEvent.IsHealing ? "HoT" : "DoT")})"
+			: $"{periodicStatusName} ({(periodicEvent.IsHealing ? "HoT" : "DoT")} / 付与元: {value.ActionName})";
+		ActionKind kind = ActionKind.Other;
 		EffectSample item = new EffectSample(periodicEvent.TargetEntityId, (!periodicEvent.IsHealing) ? periodicEvent.Amount : 0u, periodicEvent.IsHealing ? periodicEvent.Amount : 0u, Critical: false, DirectHit: false);
 		PlayerPhaseStatistics periodicPlayer = Aggregator.CurrentPhase!.EnsurePlayer(num, value2);
 		RaidBuffContribution periodicContribution = flag2
@@ -500,7 +546,7 @@ public sealed class CombatTracker : IDisposable
 		}
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 		{
-			if (flag2 && futuresRewrittenController.Stage == FuturesRewrittenStage.Phase5)
+			if (flag2)
 			{
 				lastPartyDamageAt = periodicEvent.Timestamp;
 			}
@@ -525,31 +571,46 @@ public sealed class CombatTracker : IDisposable
 		}
 	}
 
-	private IReadOnlyList<CombatStatusSnapshot> SnapshotStatuses(uint targetEntityId)
+	private IReadOnlyList<CombatStatusSnapshot> SnapshotIncomingStatuses(
+		uint playerEntityId,
+		uint enemyEntityId,
+		IReadOnlyDictionary<uint, string> partyMembers)
 	{
-		if (objectTable.SearchByEntityId(targetEntityId) is not IBattleChara battleChara)
+		List<CombatStatusSnapshot> statuses = new();
+		AddStatuses(playerEntityId, CombatStatusSide.Self);
+		AddStatuses(enemyEntityId, CombatStatusSide.Enemy);
+		return statuses
+			.OrderBy(status => status.Side)
+			.ThenBy(status => status.Kind)
+			.ThenBy(status => status.Name, StringComparer.CurrentCulture)
+			.ToArray();
+
+		void AddStatuses(uint entityId, CombatStatusSide side)
 		{
-			return Array.Empty<CombatStatusSnapshot>();
-		}
-		List<CombatStatusSnapshot> statuses = new List<CombatStatusSnapshot>();
-		foreach (var status in battleChara.StatusList)
-		{
-			if (status.StatusId == 0)
+			if (objectTable.SearchByEntityId(entityId) is not IBattleChara battleChara)
 			{
-				continue;
+				return;
 			}
-			string statusName = ResolveStatusName(status.StatusId);
-			if (!DefensiveStatusFilter.IsAllowed(statusName))
+			foreach (var status in battleChara.StatusList)
 			{
-				continue;
+				if (status.StatusId == 0)
+				{
+					continue;
+				}
+				string statusName = ResolveStatusName(status.StatusId);
+				bool sourceIsParty = Roster.ResolvePartyOwner(status.SourceId, partyMembers) != 0;
+				CombatStatusKind kind = side == CombatStatusSide.Enemy
+					? sourceIsParty ? CombatStatusKind.Debuff : CombatStatusKind.Buff
+					: sourceIsParty ? CombatStatusKind.Buff : CombatStatusKind.Debuff;
+				statuses.Add(new CombatStatusSnapshot(
+					status.StatusId,
+					statusName,
+					(ushort)status.Param,
+					Math.Max(0f, status.RemainingTime),
+					side,
+					kind));
 			}
-			statuses.Add(new CombatStatusSnapshot(
-				status.StatusId,
-				statusName,
-				(ushort)status.Param,
-				Math.Max(0f, status.RemainingTime)));
 		}
-		return statuses.OrderBy((CombatStatusSnapshot status) => status.Name, StringComparer.CurrentCulture).ToArray();
 	}
 
 	private string ResolveGameObjectName(uint entityId, string fallback)
@@ -572,11 +633,11 @@ public sealed class CombatTracker : IDisposable
 		return actionName;
 	}
 
-	private (string Name, ActionKind Kind, bool IsGcd, double GcdDurationSeconds, bool IsOffensiveGcd) ResolveAction(uint actionId)
+	private (string Name, ActionKind Kind, bool IsGcd, double GcdDurationSeconds, bool IsOffensiveGcd, bool IsLimitBreak) ResolveAction(uint actionId)
 	{
 		if (!dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>().TryGetRow(actionId, out var row))
 		{
-			return (Name: $"Action #{actionId}", Kind: ActionKind.Other, IsGcd: false, GcdDurationSeconds: 0.0, IsOffensiveGcd: false);
+			return (Name: $"Action #{actionId}", Kind: ActionKind.Other, IsGcd: false, GcdDurationSeconds: 0.0, IsOffensiveGcd: false, IsLimitBreak: false);
 		}
 		uint rowId = row.ActionCategory.RowId;
 		ActionKind item = rowId switch
@@ -592,7 +653,9 @@ public sealed class CombatTracker : IDisposable
 			row.AdditionalCooldownGroup,
 			row.Recast100ms);
 		string text = row.Name.ToString();
-		return (Name: string.IsNullOrWhiteSpace(text) ? $"Action #{actionId}" : text, Kind: item, IsGcd: item2, GcdDurationSeconds: item3, IsOffensiveGcd: item2 && row.CanTargetHostile);
+		string categoryName = row.ActionCategory.Value.Name.ToString();
+		bool isLimitBreak = categoryName.Contains("Limit Break", StringComparison.OrdinalIgnoreCase) || categoryName.Contains("リミットブレイク", StringComparison.Ordinal);
+		return (Name: string.IsNullOrWhiteSpace(text) ? $"Action #{actionId}" : text, Kind: item, IsGcd: item2, GcdDurationSeconds: item3, IsOffensiveGcd: item2 && row.CanTargetHostile, IsLimitBreak: isLimitBreak);
 	}
 
 	private string ResolveStatusName(uint statusId)
@@ -751,10 +814,11 @@ public sealed class CombatTracker : IDisposable
 
 		if (transition.Command == DedicatedPhaseCommand.End)
 		{
-			EndPhase(timestamp);
+			DateTime effectiveEnd = configuration.FflogsAnalyzeBase ? lastPartyDamageAt ?? timestamp : timestamp;
+			EndPhase(effectiveEnd);
 			if (transition.PhaseNumber == 3)
 			{
-				nextDedicatedPhaseAttackAfter = timestamp;
+				nextDedicatedPhaseAttackAfter = effectiveEnd;
 			}
 			log.Information("絶妖星乱舞 Phase {PhaseNumber} の計測を終了しました。", transition.PhaseNumber);
 			return;
@@ -764,6 +828,14 @@ public sealed class CombatTracker : IDisposable
 		{
 			EndPhase(timestamp);
 		}
+		if (configuration.FflogsAnalyzeBase && transition.PhaseNumber != 4)
+		{
+			betaPendingPhaseStart = transition.PhaseNumber;
+			lastPartyDamageAt = null;
+			log.Information("絶妖星乱舞 Phase {PhaseNumber} のFFLogs基準計測は最初の与ダメージ待ちです。", transition.PhaseNumber);
+			return;
+		}
+		lastPartyDamageAt = null;
 		BeginPhase(timestamp, members, anchorEntityId);
 		if (transition.PhaseNumber == 4)
 		{
@@ -931,6 +1003,7 @@ public sealed class CombatTracker : IDisposable
 		futuresRewrittenController.Reset();
 		lastPartyDamageAt = null;
 		nextDedicatedPhaseAttackAfter = null;
+		betaPendingPhaseStart = null;
 		dutyCompletionPending = false;
 		while (dialogueEvents.TryDequeue(out _))
 		{

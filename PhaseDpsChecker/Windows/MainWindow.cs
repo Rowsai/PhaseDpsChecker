@@ -7,6 +7,7 @@ using System.Numerics;
 using System.Threading;
 using System.Windows.Forms;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using PhaseDpsChecker.Combat;
 
@@ -28,6 +29,7 @@ public sealed class MainWindow : Window, IDisposable
 	private bool historySinglePhaseMode;
 	private int selectedHistoryFilterPhaseNumber;
 	private int selectedIncomingHistoryNumber;
+	private int selectedIncomingPhaseNumber;
 	private uint selectedIncomingEntityId;
 	private SummaryDisplayColumn summarySortColumn = SummaryDisplayColumn.Phase;
 	private bool summarySortDescending;
@@ -231,7 +233,16 @@ public sealed class MainWindow : Window, IDisposable
 		{
 			ImGui.SetTooltip("Dark KnightやWhite Mageなど、ジョブ名で表示されるリプレイ内アクターをパーティメンバーとして集計します。通常プレイ時は無効にしてください。");
 		}
-
+		ImGui.SameLine(0f, 24f);
+		bool fflogsAnalyzeBase = configuration.FflogsAnalyzeBase;
+		if (ImGui.Checkbox("FFLogs Analyze Base（βver）", ref fflogsAnalyzeBase))
+		{
+			tracker.SetFflogsAnalyzeBase(fflogsAnalyzeBase);
+		}
+		if (ImGui.IsItemHovered())
+		{
+			ImGui.SetTooltip("絶妖星乱舞で、各演出境界の直前の最終与ダメージと直後の初回与ダメージをPhase境界として使用します。初期値は無効です。");
+		}
 		ImGui.Spacing();
 		DrawSectionTitle("表示設定", "ライブ表示の対象と計測条件を設定します。");
 		Dictionary<uint, string> currentMembers = tracker.Roster.GetCurrentMembers();
@@ -518,10 +529,37 @@ public sealed class MainWindow : Window, IDisposable
 			return;
 		}
 
-		CombatHistoryRecord history = DrawHistorySelector(histories, ref selectedIncomingHistoryNumber, "IncomingHistoryList", () => selectedIncomingEntityId = 0);
+		CombatHistoryRecord history = DrawHistorySelector(histories, ref selectedIncomingHistoryNumber, "IncomingHistoryList", () =>
+		{
+			selectedIncomingEntityId = 0;
+			selectedIncomingPhaseNumber = 0;
+		});
 		if (DrawHistoryDeletionControl(histories))
 		{
 			return;
+		}
+		List<PhaseRecord> availableIncomingPhases = history.Phases.OrderBy(phase => phase.Number).ToList();
+		if (selectedIncomingPhaseNumber != 0 && availableIncomingPhases.All(phase => phase.Number != selectedIncomingPhaseNumber))
+		{
+			selectedIncomingPhaseNumber = 0;
+		}
+		ImGui.TextUnformatted("Phase別表示");
+		ImGui.SetNextItemWidth(380f);
+		if (ImGui.BeginCombo("##IncomingPhase", selectedIncomingPhaseNumber == 0 ? "Phase全体" : $"Phase {selectedIncomingPhaseNumber}"))
+		{
+			if (ImGui.Selectable("Phase全体", selectedIncomingPhaseNumber == 0))
+			{
+				selectedIncomingPhaseNumber = 0;
+			}
+			foreach (PhaseRecord phase in availableIncomingPhases)
+			{
+				bool selected = phase.Number == selectedIncomingPhaseNumber;
+				if (ImGui.Selectable($"Phase {phase.Number}", selected))
+				{
+					selectedIncomingPhaseNumber = phase.Number;
+				}
+			}
+			ImGui.EndCombo();
 		}
 		Dictionary<uint, string> members = GetHistoryMembers(history);
 		List<KeyValuePair<uint, string>> orderedMembers = members.OrderBy(member => member.Value, StringComparer.CurrentCulture).ToList();
@@ -551,7 +589,7 @@ public sealed class MainWindow : Window, IDisposable
 		}
 
 		List<IncomingRowData> rows = new List<IncomingRowData>();
-		foreach (PhaseRecord phase in history.Phases.OrderBy(phase => phase.Number))
+		foreach (PhaseRecord phase in availableIncomingPhases.Where(phase => selectedIncomingPhaseNumber == 0 || phase.Number == selectedIncomingPhaseNumber))
 		{
 			List<IncomingDamageEvent> phaseEvents = phase.IncomingDamageEvents
 				.Where(damageEvent => damageEvent.PlayerEntityId == selectedIncomingEntityId)
@@ -881,6 +919,7 @@ public sealed class MainWindow : Window, IDisposable
 		selectedHistoryPhaseNumber = 0;
 		selectedHistoryFilterPhaseNumber = 0;
 		selectedIncomingHistoryNumber = 0;
+		selectedIncomingPhaseNumber = 0;
 		selectedIncomingEntityId = 0;
 	}
 
@@ -1029,7 +1068,7 @@ public sealed class MainWindow : Window, IDisposable
 		TextColumn(3, FormatElapsed(phase.EndedAt ?? damageEvent.Timestamp, encounterStart));
 		ProgressColumn(4, damageEvent.Amount, maximumAmount, damageEvent.Amount.ToString("N0"), new Vector4(0.92f, 0.29f, 0.22f, 0.9f));
 		TextColumn(5, $"{damageEvent.EnemyName} / {damageEvent.ActionName}");
-		TextColumn(6, FormatStatuses(damageEvent.Statuses));
+		DrawStatusBreakdownColumn(6, damageEvent.Statuses);
 	}
 
 	private void DrawActionGroup(string label, IEnumerable<ActionStatistics> source, string idPrefix)
@@ -1066,7 +1105,7 @@ public sealed class MainWindow : Window, IDisposable
 				ActionStatistics action = actions[index];
 				ImGui.TableNextRow();
 				TextColumn(0, (index + 1).ToString());
-				TextColumn(1, action.ActionName);
+				DrawActionNameColumn(1, action);
 				TextColumn(2, action.UseCount.ToString("N0"));
 				TextColumn(3, action.InterruptedCastCount.ToString("N0"));
 				TextColumn(4, action.TotalDamage.ToString("N0"));
@@ -1287,9 +1326,84 @@ public sealed class MainWindow : Window, IDisposable
 		{
 			return "なし";
 		}
-		return string.Join(", ", statuses.Select(status => status.Stacks > 1
+		return string.Join(", ", statuses.Select(status => $"{status.Side}:{status.Kind}:" + (status.Stacks > 1
 			? $"{status.Name} x{status.Stacks} ({status.RemainingSeconds:0.0}s)"
-			: $"{status.Name} ({status.RemainingSeconds:0.0}s)"));
+			: $"{status.Name} ({status.RemainingSeconds:0.0}s)")));
+	}
+
+	private static void DrawActionNameColumn(int column, ActionStatistics action)
+	{
+		ImGui.TableSetColumnIndex(column);
+		uint iconId = 0;
+		if ((action.ActionId & 0xF0000000u) == 0x80000000u)
+		{
+			uint statusId = action.ActionId & 0x0FFFFFFFu;
+			if (Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Status>().TryGetRow(statusId, out var status))
+			{
+				iconId = status.Icon;
+			}
+		}
+		else if (Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>().TryGetRow(action.ActionId, out var actionRow))
+		{
+			iconId = actionRow.Icon;
+		}
+		DrawGameIcon(iconId, action.ActionName);
+		ImGui.TextUnformatted(action.ActionName);
+	}
+
+	private static void DrawStatusBreakdownColumn(int column, IReadOnlyList<CombatStatusSnapshot> statuses)
+	{
+		ImGui.TableSetColumnIndex(column);
+		DrawStatusGroup("エネミーバフ：", statuses.Where(status => status.Side == CombatStatusSide.Enemy && status.Kind == CombatStatusKind.Buff));
+		ImGui.SameLine(0f, 4f);
+		DrawStatusGroup(" / デバフ：", statuses.Where(status => status.Side == CombatStatusSide.Enemy && status.Kind == CombatStatusKind.Debuff));
+		DrawStatusGroup("自身のバフ：", statuses.Where(status => status.Side == CombatStatusSide.Self && status.Kind == CombatStatusKind.Buff));
+		ImGui.SameLine(0f, 4f);
+		DrawStatusGroup(" / デバフ：", statuses.Where(status => status.Side == CombatStatusSide.Self && status.Kind == CombatStatusKind.Debuff));
+	}
+
+	private static void DrawStatusGroup(string label, IEnumerable<CombatStatusSnapshot> source)
+	{
+		List<CombatStatusSnapshot> statuses = source.ToList();
+		ImGui.TextUnformatted(label);
+		ImGui.SameLine(0f, 3f);
+		if (statuses.Count == 0)
+		{
+			ImGui.TextDisabled("なし");
+			return;
+		}
+		for (int index = 0; index < statuses.Count; index++)
+		{
+			CombatStatusSnapshot status = statuses[index];
+			uint iconId = 0;
+			if (Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Status>().TryGetRow(status.StatusId, out var statusRow))
+			{
+				iconId = statusRow.Icon;
+			}
+			DrawGameIcon(iconId, status.Name);
+			string suffix = status.Stacks > 1 ? $" x{status.Stacks}" : string.Empty;
+			ImGui.TextUnformatted($"{status.Name}{suffix} ({status.RemainingSeconds:0.0}s){(index < statuses.Count - 1 ? "," : string.Empty)}");
+			if (index < statuses.Count - 1)
+			{
+				ImGui.SameLine(0f, 4f);
+			}
+		}
+	}
+
+	private static void DrawGameIcon(uint iconId, string tooltip)
+	{
+		if (iconId == 0)
+		{
+			return;
+		}
+		var texture = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(iconId)).GetWrapOrEmpty();
+		float size = Math.Max(18f, ImGui.GetTextLineHeight());
+		ImGui.Image(texture.Handle, new Vector2(size, size));
+		if (ImGui.IsItemHovered())
+		{
+			ImGui.SetTooltip(tooltip);
+		}
+		ImGui.SameLine(0f, 4f);
 	}
 
 	private static string Percent(double rate)
