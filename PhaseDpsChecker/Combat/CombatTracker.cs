@@ -273,9 +273,15 @@ public sealed class CombatTracker : IDisposable
 
 	public void SetHistoryDirectory(string directory)
 	{
+		if (Aggregator.Phases.Count > 0)
+		{
+			ArchiveCurrentCombat(CombatHistoryEndReason.Manual);
+		}
 		configuration.HistoryDirectory = directory ?? string.Empty;
 		configuration.Save();
+		Aggregator.ClearArchivedHistory();
 		historyStore.Save(Aggregator.Histories);
+		Aggregator.RestoreArchivedHistory(historyStore.Load());
 	}
 
 	private void OnFrameworkUpdate(IFramework frameworkContext)
@@ -417,6 +423,7 @@ public sealed class CombatTracker : IDisposable
 				recordMemberIds = withLimitBreak.Keys.ToHashSet();
 			}
 			PlayerPhaseStatistics player = Aggregator.CurrentPhase!.EnsurePlayer(recordedEntityId, recordedPlayerName);
+			player.SetJobId(isLimitBreak ? 0 : Roster.GetJobId(partyOwnerId));
 			List<(EffectSample Effect, RaidBuffContribution Contribution)> raidContributions = isLimitBreak
 				? new List<(EffectSample, RaidBuffContribution)>()
 				: rawAction.Effects
@@ -453,7 +460,8 @@ public sealed class CombatTracker : IDisposable
 					rawAction.ActionId,
 					incomingActionName,
 					(uint)Math.Min(total, uint.MaxValue),
-					SnapshotIncomingStatuses(group.Key, rawAction.SourceEntityId, members)), memberIds);
+					SnapshotIncomingStatuses(group.Key, rawAction.SourceEntityId, members),
+					IsFatalDamage(group.Key)), memberIds);
 			}
 		}
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
@@ -474,6 +482,17 @@ public sealed class CombatTracker : IDisposable
 	private void ProcessPeriodicEvent(RawPeriodicEvent periodicEvent, IReadOnlyDictionary<uint, string> members, IReadOnlySet<uint> memberIds)
 	{
 		uint num = Roster.ResolvePartyOwner(periodicEvent.SourceEntityId, members);
+		if (num == 0 && objectTable.SearchByEntityId(periodicEvent.TargetEntityId) is IBattleChara periodicTarget)
+		{
+			foreach (var status in periodicTarget.StatusList)
+			{
+				if (status.StatusId == periodicEvent.StatusId)
+				{
+					num = Roster.ResolvePartyOwner(status.SourceId, members);
+					if (num != 0) break;
+				}
+			}
+		}
 		bool targetsParty = memberIds.Contains(periodicEvent.TargetEntityId);
 		if (!periodicEvent.IsHealing && targetsParty && num == 0 && members.TryGetValue(periodicEvent.TargetEntityId, out string targetPlayerName))
 		{
@@ -491,7 +510,8 @@ public sealed class CombatTracker : IDisposable
 				PeriodicActionMask | periodicEvent.StatusId,
 				$"{statusName} (DoT)",
 				periodicEvent.Amount,
-				SnapshotIncomingStatuses(periodicEvent.TargetEntityId, periodicEvent.SourceEntityId, members)), memberIds);
+				SnapshotIncomingStatuses(periodicEvent.TargetEntityId, periodicEvent.SourceEntityId, members),
+				IsFatalDamage(periodicEvent.TargetEntityId)), memberIds);
 			return;
 		}
 		PeriodicAttribution value = null;
@@ -530,12 +550,11 @@ public sealed class CombatTracker : IDisposable
 		}
 		string periodicStatusName = ResolveStatusName(periodicEvent.StatusId);
 		uint actionId = PeriodicActionMask | periodicEvent.StatusId;
-		string actionName = value == null
-			? $"{periodicStatusName} ({(periodicEvent.IsHealing ? "HoT" : "DoT")})"
-			: $"{periodicStatusName} ({(periodicEvent.IsHealing ? "HoT" : "DoT")} / 付与元: {value.ActionName})";
+		string actionName = periodicStatusName;
 		ActionKind kind = ActionKind.Other;
 		EffectSample item = new EffectSample(periodicEvent.TargetEntityId, (!periodicEvent.IsHealing) ? periodicEvent.Amount : 0u, periodicEvent.IsHealing ? periodicEvent.Amount : 0u, Critical: false, DirectHit: false);
 		PlayerPhaseStatistics periodicPlayer = Aggregator.CurrentPhase!.EnsurePlayer(num, value2);
+		periodicPlayer.SetJobId(Roster.GetJobId(num));
 		RaidBuffContribution periodicContribution = flag2
 			? raidBuffCalculator.Calculate(num, num, periodicEvent.TargetEntityId, item, periodicPlayer, members)
 			: RaidBuffContribution.Empty;
@@ -598,19 +617,53 @@ public sealed class CombatTracker : IDisposable
 					continue;
 				}
 				string statusName = ResolveStatusName(status.StatusId);
+				if (IsFoodStatus(statusName))
+				{
+					continue;
+				}
 				bool sourceIsParty = Roster.ResolvePartyOwner(status.SourceId, partyMembers) != 0;
 				CombatStatusKind kind = side == CombatStatusSide.Enemy
 					? sourceIsParty ? CombatStatusKind.Debuff : CombatStatusKind.Buff
 					: sourceIsParty ? CombatStatusKind.Buff : CombatStatusKind.Debuff;
+				uint barrierAmount = side == CombatStatusSide.Self && IsBarrierStatus(statusName)
+					? EstimateBarrierAmount(battleChara)
+					: 0;
 				statuses.Add(new CombatStatusSnapshot(
 					status.StatusId,
 					statusName,
 					(ushort)status.Param,
 					Math.Max(0f, status.RemainingTime),
 					side,
-					kind));
+					kind,
+					barrierAmount));
 			}
 		}
+	}
+
+	private bool IsFatalDamage(uint playerEntityId) =>
+		objectTable.SearchByEntityId(playerEntityId) is ICharacter player && (player.IsDead || player.CurrentHp == 0);
+
+	private static uint EstimateBarrierAmount(IBattleChara actor)
+	{
+		double amount = actor.MaxHp * actor.ShieldPercentage / 100.0;
+		return (uint)Math.Clamp(amount, 0.0, uint.MaxValue);
+	}
+
+	private static bool IsFoodStatus(string name) =>
+		name.Contains("Well Fed", StringComparison.OrdinalIgnoreCase) ||
+		name.Contains("食事効果", StringComparison.Ordinal) ||
+		name.Contains("食事", StringComparison.Ordinal);
+
+	private static bool IsBarrierStatus(string name)
+	{
+		string[] barriers =
+		[
+			"Galvanize", "Catalyze", "Divine Veil", "Shake It Off", "The Blackest Night", "Eukrasian Diagnosis",
+			"Eukrasian Prognosis", "Haima", "Panhaima", "Divine Benison", "Adloquium", "Nocturnal Field",
+			"鼓舞", "激励", "ディヴァインヴェール", "シェイクオフ", "ブラックナイト", "エウクラシア・ディアグノシス",
+			"エウクラシア・プログノシス", "ハイマ", "パンハイマ", "ディヴァインベニゾン"
+		];
+		return barriers.Any(barrier => name.Contains(barrier, StringComparison.OrdinalIgnoreCase));
 	}
 
 	private string ResolveGameObjectName(uint entityId, string fallback)
@@ -698,7 +751,11 @@ public sealed class CombatTracker : IDisposable
 	private void BeginPhase(DateTime timestamp, IReadOnlyDictionary<uint, string> members, uint anchorEntityId)
 	{
 		anchorTargetEntityId = anchorEntityId;
-		Aggregator.BeginPhase(timestamp, members, anchorEntityId);
+		PhaseRecord phase = Aggregator.BeginPhase(timestamp, members, anchorEntityId);
+		foreach (uint entityId in members.Keys)
+		{
+			phase.Players[entityId].SetJobId(Roster.GetJobId(entityId));
+		}
 		anchorWasTargetable = anchorEntityId != 0 && objectTable.SearchByEntityId(anchorEntityId)?.IsTargetable == true;
 		combatLostAt = null;
 	}

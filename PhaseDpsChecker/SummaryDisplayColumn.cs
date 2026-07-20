@@ -8,6 +8,7 @@ public enum SummaryDisplayColumn
 	End,
 	Dps,
 	Rdps,
+	TotalDamage,
 	Critical,
 	DirectHit,
 	CriticalDirectHit,
@@ -27,6 +28,7 @@ public static class SummaryDisplayColumnCatalog
 		SummaryDisplayColumn.End,
 		SummaryDisplayColumn.Dps,
 		SummaryDisplayColumn.Rdps,
+		SummaryDisplayColumn.TotalDamage,
 		SummaryDisplayColumn.Critical,
 		SummaryDisplayColumn.DirectHit,
 		SummaryDisplayColumn.CriticalDirectHit,
@@ -44,6 +46,7 @@ public static class SummaryDisplayColumnCatalog
 		SummaryDisplayColumn.End => "終了時間",
 		SummaryDisplayColumn.Dps => "DPS",
 		SummaryDisplayColumn.Rdps => "rDPS",
+		SummaryDisplayColumn.TotalDamage => "総ダメージ",
 		SummaryDisplayColumn.Critical => "Crit %",
 		SummaryDisplayColumn.DirectHit => "DH %",
 		SummaryDisplayColumn.CriticalDirectHit => "Crit + DH %",
@@ -55,7 +58,7 @@ public static class SummaryDisplayColumnCatalog
 	};
 
 	public static bool DefaultDescending(this SummaryDisplayColumn column) => column is
-		SummaryDisplayColumn.Dps or SummaryDisplayColumn.Rdps or SummaryDisplayColumn.Critical or
+		SummaryDisplayColumn.Dps or SummaryDisplayColumn.Rdps or SummaryDisplayColumn.TotalDamage or SummaryDisplayColumn.Critical or
 		SummaryDisplayColumn.DirectHit or SummaryDisplayColumn.CriticalDirectHit or
 		SummaryDisplayColumn.MaximumDamage or SummaryDisplayColumn.Active or
 		SummaryDisplayColumn.DamageActive or SummaryDisplayColumn.HealingActive;

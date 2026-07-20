@@ -57,56 +57,43 @@ internal sealed class RaidBuffContributionCalculator
 			return RaidBuffContribution.Empty;
 		}
 
-		double damageMultiplier = buffs.Where(buff => buff.Kind == RaidBuffKind.Damage).Aggregate(1.0, (value, buff) => value * (1.0 + buff.Rate));
+		List<RaidBuffComponent> damageBuffs = buffs.Where(buff => buff.Kind == RaidBuffKind.Damage).ToList();
+		List<RaidBuffComponent> criticalBuffs = buffs.Where(buff => buff.Kind == RaidBuffKind.Critical).ToList();
+		List<RaidBuffComponent> directHitBuffs = buffs.Where(buff => buff.Kind == RaidBuffKind.DirectHit).ToList();
+		double damageMultiplier = damageBuffs.Aggregate(1.0, (value, buff) => value * (1.0 + buff.Rate));
 		double criticalBonus = buffs.Where(buff => buff.Kind == RaidBuffKind.Critical).Sum(buff => buff.Rate);
 		double directHitBonus = buffs.Where(buff => buff.Kind == RaidBuffKind.DirectHit).Sum(buff => buff.Rate);
 		double criticalChance = Math.Clamp(player.EstimatedUnbuffedCriticalChance + criticalBonus, 0.0, 1.0);
 		double directHitChance = Math.Clamp(player.EstimatedUnbuffedDirectHitChance + directHitBonus, 0.0, 1.0);
 		double externalCriticalProbability = effect.Critical && criticalChance > 0.0 ? Math.Clamp(criticalBonus / criticalChance, 0.0, 1.0) : 0.0;
 		double externalDirectHitProbability = effect.DirectHit && directHitChance > 0.0 ? Math.Clamp(directHitBonus / directHitChance, 0.0, 1.0) : 0.0;
-		double criticalMultiplier = 1.35 + player.EstimatedUnbuffedCriticalChance;
+		const double criticalMultiplier = 1.40;
+		const double directHitMultiplier = 1.25;
 
 		Dictionary<uint, double> granted = new();
-		double received = 0.0;
-		foreach ((bool externalCritical, double criticalWeight) in Branches(effect.Critical, externalCriticalProbability))
-		{
-			foreach ((bool externalDirectHit, double directHitWeight) in Branches(effect.DirectHit, externalDirectHitProbability))
-			{
-				double branchWeight = criticalWeight * directHitWeight;
-				if (branchWeight <= 0.0)
-				{
-					continue;
-				}
-				double combinedMultiplier = damageMultiplier * (externalCritical ? criticalMultiplier : 1.0) * (externalDirectHit ? 1.25 : 1.0);
-				if (combinedMultiplier <= 1.0)
-				{
-					continue;
-				}
+		double observedDamage = effect.Damage;
+		double afterDamageBuffRemoval = observedDamage / damageMultiplier;
+		double damageBuffReceived = observedDamage - afterDamageBuffRemoval;
+		double criticalBuffReceived = afterDamageBuffRemoval * externalCriticalProbability * (1.0 - 1.0 / criticalMultiplier);
+		double afterCriticalRemoval = afterDamageBuffRemoval - criticalBuffReceived;
+		double directHitBuffReceived = afterCriticalRemoval * externalDirectHitProbability * (1.0 - 1.0 / directHitMultiplier);
+		double received = damageBuffReceived + criticalBuffReceived + directHitBuffReceived;
 
-				double branchPool = effect.Damage * (1.0 - 1.0 / combinedMultiplier) * branchWeight;
-				double logTotal = Math.Log(combinedMultiplier);
-				foreach (RaidBuffComponent buff in buffs.Where(buff => buff.Kind == RaidBuffKind.Damage))
-				{
-					AddGranted(granted, buff.ProviderEntityId, branchPool * Math.Log(1.0 + buff.Rate) / logTotal);
-				}
-				if (externalCritical && criticalBonus > 0.0)
-				{
-					double pool = branchPool * Math.Log(criticalMultiplier) / logTotal;
-					foreach (RaidBuffComponent buff in buffs.Where(buff => buff.Kind == RaidBuffKind.Critical))
-					{
-						AddGranted(granted, buff.ProviderEntityId, pool * buff.Rate / criticalBonus);
-					}
-				}
-				if (externalDirectHit && directHitBonus > 0.0)
-				{
-					double pool = branchPool * Math.Log(1.25) / logTotal;
-					foreach (RaidBuffComponent buff in buffs.Where(buff => buff.Kind == RaidBuffKind.DirectHit))
-					{
-						AddGranted(granted, buff.ProviderEntityId, pool * buff.Rate / directHitBonus);
-					}
-				}
-				received += branchPool;
-			}
+		// FFLogs型rDPSでは、各付与者がそのバフを付与しなかった場合との差（限界寄与）を
+		// 付与者へ加算する。複数バフの増分を対数比で分割しない。
+		foreach (RaidBuffComponent buff in damageBuffs)
+		{
+			AddGranted(granted, buff.ProviderEntityId, observedDamage * buff.Rate / (1.0 + buff.Rate));
+		}
+		foreach (RaidBuffComponent buff in criticalBuffs)
+		{
+			double probability = effect.Critical && criticalChance > 0.0 ? Math.Clamp(buff.Rate / criticalChance, 0.0, 1.0) : 0.0;
+			AddGranted(granted, buff.ProviderEntityId, afterDamageBuffRemoval * probability * (1.0 - 1.0 / criticalMultiplier));
+		}
+		foreach (RaidBuffComponent buff in directHitBuffs)
+		{
+			double probability = effect.DirectHit && directHitChance > 0.0 ? Math.Clamp(buff.Rate / directHitChance, 0.0, 1.0) : 0.0;
+			AddGranted(granted, buff.ProviderEntityId, afterCriticalRemoval * probability * (1.0 - 1.0 / directHitMultiplier));
 		}
 
 		return new RaidBuffContribution(received, granted, criticalBonus > 0.0, directHitBonus > 0.0);
@@ -184,20 +171,6 @@ internal sealed class RaidBuffContributionCalculator
 		return resolved.Count != 0;
 
 		void Add(RaidBuffKind kind, double rate) => resolved.Add((kind, rate));
-	}
-
-	private static IEnumerable<(bool External, double Weight)> Branches(bool occurred, double externalProbability)
-	{
-		if (!occurred || externalProbability <= 0.0)
-		{
-			yield return (false, 1.0);
-			yield break;
-		}
-		if (externalProbability < 1.0)
-		{
-			yield return (false, 1.0 - externalProbability);
-		}
-		yield return (true, externalProbability);
 	}
 
 	private static bool Matches(string actual, params string[] names) => names.Any(name => string.Equals(actual, name, StringComparison.OrdinalIgnoreCase));

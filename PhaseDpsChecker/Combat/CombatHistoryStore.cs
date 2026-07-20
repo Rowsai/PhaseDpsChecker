@@ -106,6 +106,7 @@ internal sealed class CombatHistoryStore
 			foreach (PlayerDto savedPlayer in savedPhase.Players)
 			{
 				PlayerPhaseStatistics player = phase.EnsurePlayer(savedPlayer.EntityId, savedPlayer.PlayerName);
+				player.SetJobId(savedPlayer.JobId);
 				player.RestoreState(
 					savedPlayer.TotalDamage,
 					savedPlayer.TotalHealing,
@@ -153,7 +154,8 @@ internal sealed class CombatHistoryStore
 					incoming.ActionId,
 					incoming.ActionName,
 					incoming.Amount,
-					incoming.Statuses.Select(status => new CombatStatusSnapshot(status.StatusId, status.Name, status.StackCount, status.RemainingSeconds, status.Side, status.Kind)).ToArray()));
+					incoming.Statuses.Select(status => new CombatStatusSnapshot(status.StatusId, status.Name, status.StackCount, status.RemainingSeconds, status.Side, status.Kind, status.BarrierAmount)).ToArray(),
+					incoming.IsFatal));
 			}
 			phases.Add(phase);
 		}
@@ -205,6 +207,7 @@ internal sealed class CombatHistoryStore
 	private sealed class PlayerDto
 	{
 		public uint EntityId { get; set; }
+		public uint JobId { get; set; }
 		public string PlayerName { get; set; } = string.Empty;
 		public long TotalDamage { get; set; }
 		public long TotalHealing { get; set; }
@@ -227,6 +230,7 @@ internal sealed class CombatHistoryStore
 		public static PlayerDto From(PlayerPhaseStatistics player) => new()
 		{
 			EntityId = player.EntityId,
+			JobId = player.JobId,
 			PlayerName = player.PlayerName,
 			TotalDamage = player.TotalDamage,
 			TotalHealing = player.TotalHealing,
@@ -302,6 +306,7 @@ internal sealed class CombatHistoryStore
 		public uint ActionId { get; set; }
 		public string ActionName { get; set; } = string.Empty;
 		public uint Amount { get; set; }
+		public bool IsFatal { get; set; }
 		public List<StatusDto> Statuses { get; set; } = new();
 
 		public static IncomingDamageDto From(IncomingDamageEvent incoming) => new()
@@ -314,6 +319,7 @@ internal sealed class CombatHistoryStore
 			ActionId = incoming.ActionId,
 			ActionName = incoming.ActionName,
 			Amount = incoming.Amount,
+			IsFatal = incoming.IsFatal,
 			Statuses = incoming.Statuses.Select(StatusDto.From).ToList()
 		};
 	}
@@ -326,6 +332,7 @@ internal sealed class CombatHistoryStore
 		public float RemainingSeconds { get; set; }
 		public CombatStatusSide Side { get; set; }
 		public CombatStatusKind Kind { get; set; }
+		public uint BarrierAmount { get; set; }
 
 		public static StatusDto From(CombatStatusSnapshot status) => new()
 		{
@@ -334,7 +341,8 @@ internal sealed class CombatHistoryStore
 			StackCount = status.Stacks,
 			RemainingSeconds = status.RemainingSeconds,
 			Side = status.Side,
-			Kind = status.Kind
+			Kind = status.Kind,
+			BarrierAmount = status.BarrierAmount
 		};
 	}
 }

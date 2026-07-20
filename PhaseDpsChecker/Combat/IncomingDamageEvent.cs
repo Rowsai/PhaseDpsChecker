@@ -12,4 +12,5 @@ public sealed record IncomingDamageEvent(
 	uint ActionId,
 	string ActionName,
 	uint Amount,
-	IReadOnlyList<CombatStatusSnapshot> Statuses);
+	IReadOnlyList<CombatStatusSnapshot> Statuses,
+	bool IsFatal = false);

@@ -7,7 +7,7 @@ namespace PhaseDpsChecker;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 9;
+	public int Version { get; set; } = 10;
 
 	public bool IsEnabled { get; set; } = true;
 
@@ -27,6 +27,7 @@ public sealed class Configuration : IPluginConfiguration
 	public bool ShowEndColumn { get; set; } = true;
 	public bool ShowDpsColumn { get; set; } = true;
 	public bool ShowRdpsColumn { get; set; } = true;
+	public bool ShowTotalDamageColumn { get; set; } = true;
 	public bool ShowCriticalColumn { get; set; } = true;
 	public bool ShowDirectHitColumn { get; set; } = true;
 	public bool ShowCriticalDirectHitColumn { get; set; } = true;
@@ -49,6 +50,7 @@ public sealed class Configuration : IPluginConfiguration
 		SummaryDisplayColumn.End => ShowEndColumn,
 		SummaryDisplayColumn.Dps => ShowDpsColumn,
 		SummaryDisplayColumn.Rdps => ShowRdpsColumn,
+		SummaryDisplayColumn.TotalDamage => ShowTotalDamageColumn,
 		SummaryDisplayColumn.Critical => ShowCriticalColumn,
 		SummaryDisplayColumn.DirectHit => ShowDirectHitColumn,
 		SummaryDisplayColumn.CriticalDirectHit => ShowCriticalDirectHitColumn,
@@ -69,6 +71,7 @@ public sealed class Configuration : IPluginConfiguration
 			case SummaryDisplayColumn.End: ShowEndColumn = visible; break;
 			case SummaryDisplayColumn.Dps: ShowDpsColumn = visible; break;
 			case SummaryDisplayColumn.Rdps: ShowRdpsColumn = visible; break;
+			case SummaryDisplayColumn.TotalDamage: ShowTotalDamageColumn = visible; break;
 			case SummaryDisplayColumn.Critical: ShowCriticalColumn = visible; break;
 			case SummaryDisplayColumn.DirectHit: ShowDirectHitColumn = visible; break;
 			case SummaryDisplayColumn.CriticalDirectHit: ShowCriticalDirectHitColumn = visible; break;

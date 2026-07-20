@@ -88,6 +88,12 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 			Configuration.Version = 9;
 			Configuration.Save();
 		}
+		if (Configuration.Version < 10)
+		{
+			Configuration.ShowTotalDamageColumn = true;
+			Configuration.Version = 10;
+			Configuration.Save();
+		}
 		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, ChatGui, GameInteropProvider, Log);
 		partyOverlayWindow = new PartyOverlayWindow(Configuration, combatTracker);
 		mainWindow = new MainWindow(Configuration, combatTracker);

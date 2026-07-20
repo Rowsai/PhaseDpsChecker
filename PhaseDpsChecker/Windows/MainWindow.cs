@@ -15,6 +15,7 @@ namespace PhaseDpsChecker.Windows;
 
 public sealed class MainWindow : Window, IDisposable
 {
+	private const uint TotalDpsHistoryTarget = 0xFFFFFFFDu;
 	internal const int BlueThemeColorCount = 24;
 
 	private static readonly ImGuiTableFlags TableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable | ImGuiTableFlags.RowBg;
@@ -113,6 +114,7 @@ public sealed class MainWindow : Window, IDisposable
 
 	public override void Draw()
 	{
+		ProcessHistoryFolderPickerResults();
 		HistoryFileSizeStatus historyFileSizeStatus = tracker.HistoryFileSizeStatus;
 		if (historyFileSizeStatus.Level == HistoryFileSizeLevel.Danger && lastHistoryFileSizeLevel != HistoryFileSizeLevel.Danger)
 		{
@@ -198,15 +200,7 @@ public sealed class MainWindow : Window, IDisposable
 
 	private void DrawSettings()
 	{
-		while (selectedHistoryDirectories.TryDequeue(out string? selectedDirectory))
-		{
-			tracker.SetHistoryDirectory(selectedDirectory);
-			historyFolderPickerError = null;
-		}
-		while (historyFolderPickerErrors.TryDequeue(out string? pickerError))
-		{
-			historyFolderPickerError = pickerError;
-		}
+		ProcessHistoryFolderPickerResults();
 
 		DrawSectionTitle("プラグイン動作", "戦闘データの取得と集計を有効または無効にします。");
 		bool pluginEnabled = configuration.IsEnabled;
@@ -233,6 +227,7 @@ public sealed class MainWindow : Window, IDisposable
 		{
 			ImGui.SetTooltip("Dark KnightやWhite Mageなど、ジョブ名で表示されるリプレイ内アクターをパーティメンバーとして集計します。通常プレイ時は無効にしてください。");
 		}
+
 		ImGui.SameLine(0f, 24f);
 		bool fflogsAnalyzeBase = configuration.FflogsAnalyzeBase;
 		if (ImGui.Checkbox("FFLogs Analyze Base（βver）", ref fflogsAnalyzeBase))
@@ -365,6 +360,20 @@ public sealed class MainWindow : Window, IDisposable
 			: $"状態: Phase {currentPhase.Number} を計測中 / 保存済み履歴 {tracker.Aggregator.Histories.Count}件");
 	}
 
+	private void ProcessHistoryFolderPickerResults()
+	{
+		while (selectedHistoryDirectories.TryDequeue(out string? selectedDirectory))
+		{
+			tracker.SetHistoryDirectory(selectedDirectory);
+			historyFolderPickerError = null;
+			ResetHistorySelections();
+		}
+		while (historyFolderPickerErrors.TryDequeue(out string? pickerError))
+		{
+			historyFolderPickerError = pickerError;
+		}
+	}
+
 	private void DrawDisplay()
 	{
 		IReadOnlyList<PhaseRecord> phases = tracker.Aggregator.Phases;
@@ -473,7 +482,7 @@ public sealed class MainWindow : Window, IDisposable
 			: history.Phases;
 
 		Dictionary<uint, string> historyMembers = GetHistoryMembers(history);
-		if (selectedHistoryEntityId != 0 && !historyMembers.ContainsKey(selectedHistoryEntityId))
+		if (selectedHistoryEntityId != 0 && selectedHistoryEntityId != TotalDpsHistoryTarget && !historyMembers.ContainsKey(selectedHistoryEntityId))
 		{
 			selectedHistoryEntityId = 0;
 			selectedHistoryPhaseNumber = 0;
@@ -481,6 +490,7 @@ public sealed class MainWindow : Window, IDisposable
 
 		string selectedLabel = selectedHistoryEntityId == 0
 			? "パーティメンバー全体"
+			: selectedHistoryEntityId == TotalDpsHistoryTarget ? "Total DPS"
 			: historyMembers.TryGetValue(selectedHistoryEntityId, out string? historyName) ? historyName : "不明なメンバー";
 		ImGui.TextUnformatted("履歴の表示対象");
 		ImGui.SetNextItemWidth(380f);
@@ -489,6 +499,11 @@ public sealed class MainWindow : Window, IDisposable
 			if (ImGui.Selectable("パーティメンバー全体", selectedHistoryEntityId == 0))
 			{
 				selectedHistoryEntityId = 0;
+				selectedHistoryPhaseNumber = 0;
+			}
+			if (ImGui.Selectable("Total DPS", selectedHistoryEntityId == TotalDpsHistoryTarget))
+			{
+				selectedHistoryEntityId = TotalDpsHistoryTarget;
 				selectedHistoryPhaseNumber = 0;
 			}
 			foreach (KeyValuePair<uint, string> member in historyMembers.OrderBy(member => member.Value, StringComparer.CurrentCulture))
@@ -510,7 +525,11 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.Spacing();
 		ImGui.Separator();
 		ImGui.Spacing();
-		if (selectedHistoryEntityId == 0)
+		if (selectedHistoryEntityId == TotalDpsHistoryTarget)
+		{
+			DrawTotalDpsHistory(history);
+		}
+		else if (selectedHistoryEntityId == 0)
 		{
 			DrawPartyOverview(displayPhases, $"履歴 #{history.Number} / パーティメンバー全体", "HistoryPartyOverview", "この履歴には表示可能なフェーズがありません。");
 		}
@@ -722,6 +741,42 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.EndTable();
 	}
 
+	private static void DrawTotalDpsHistory(CombatHistoryRecord history)
+	{
+		DrawSectionTitle($"履歴 #{history.Number} / Total DPS", "全Phaseの総ダメージを、履歴全体の計測時間で割った値です。");
+		double durationSeconds = Math.Max(0.001, (history.EndedAt - history.StartedAt).TotalSeconds);
+		long totalDamage = history.Phases.SelectMany(phase => phase.Players.Values).Sum(player => player.TotalDamage);
+		double totalDps = totalDamage / durationSeconds;
+		DrawMetricCards([
+			("TOTAL DPS", totalDps.ToString("N1"), new Vector4(0.35f, 0.78f, 1f, 1f)),
+			("総ダメージ", totalDamage.ToString("N0"), new Vector4(0.25f, 0.72f, 1f, 1f)),
+			("計測時間", FormatDuration(TimeSpan.FromSeconds(durationSeconds)), new Vector4(0.25f, 0.82f, 0.92f, 1f))
+		]);
+
+		var players = history.Phases
+			.SelectMany(phase => phase.Players.Values)
+			.GroupBy(player => player.EntityId)
+			.Select(group => new { Name = group.Last().PlayerName, JobId = group.Select(player => player.JobId).LastOrDefault(id => id != 0), Damage = group.Sum(player => player.TotalDamage) })
+			.OrderByDescending(player => player.Damage)
+			.ToList();
+		ImGui.Spacing();
+		if (ImGui.BeginTable("##TotalDpsHistory", 3, TableFlags))
+		{
+			ImGui.TableSetupColumn("プレイヤー名");
+			ImGui.TableSetupColumn("総ダメージ");
+			ImGui.TableSetupColumn("DPS");
+			ImGui.TableHeadersRow();
+			foreach (var player in players)
+			{
+				ImGui.TableNextRow();
+				DrawPlayerNameColumn(0, player.Name, player.JobId);
+				TextColumn(1, player.Damage.ToString("N0"));
+				TextColumn(2, (player.Damage / durationSeconds).ToString("N1"));
+			}
+			ImGui.EndTable();
+		}
+	}
+
 	private void DrawPlayerDetail(IReadOnlyList<PhaseRecord> sourcePhases, uint entityId, string playerName, ref int selectedPhaseNumber, string idPrefix, bool showPhaseSelector = true)
 	{
 		List<PhaseRecord> phases = sourcePhases.Where(phase => phase.Players.ContainsKey(entityId)).OrderBy(phase => phase.Number).ToList();
@@ -831,6 +886,7 @@ public sealed class MainWindow : Window, IDisposable
 			SummaryDisplayColumn.End => left.Phase.EffectiveEnd(DateTime.UtcNow).CompareTo(right.Phase.EffectiveEnd(DateTime.UtcNow)),
 			SummaryDisplayColumn.Dps => left.Dps.CompareTo(right.Dps),
 			SummaryDisplayColumn.Rdps => left.Rdps.CompareTo(right.Rdps),
+			SummaryDisplayColumn.TotalDamage => left.Player.TotalDamage.CompareTo(right.Player.TotalDamage),
 			SummaryDisplayColumn.Critical => left.Player.CriticalRate.CompareTo(right.Player.CriticalRate),
 			SummaryDisplayColumn.DirectHit => left.Player.DirectHitRate.CompareTo(right.Player.DirectHitRate),
 			SummaryDisplayColumn.CriticalDirectHit => left.Player.CriticalDirectHitRate.CompareTo(right.Player.CriticalDirectHitRate),
@@ -1039,13 +1095,14 @@ public sealed class MainWindow : Window, IDisposable
 			switch (columns[index])
 			{
 				case SummaryDisplayColumn.Phase: TextColumn(index, PhaseLabel(phase)); break;
-				case SummaryDisplayColumn.Player: TextColumn(index, player.PlayerName); break;
+				case SummaryDisplayColumn.Player: DrawPlayerNameColumn(index, player.PlayerName, player.JobId); break;
 				case SummaryDisplayColumn.Start: TextColumn(index, FormatElapsed(phase.StartedAt, encounterStart)); break;
 				case SummaryDisplayColumn.End:
 					TextColumn(index, phase.EndedAt.HasValue ? FormatElapsed(phase.EndedAt.Value, encounterStart) : $"{FormatElapsed(now, encounterStart)} (計測中)");
 					break;
 				case SummaryDisplayColumn.Dps: ProgressColumn(index, row.Dps, maximumDps, row.Dps.ToString("N1"), new Vector4(0.05f, 0.52f, 0.86f, 0.9f)); break;
 				case SummaryDisplayColumn.Rdps: ProgressColumn(index, row.Rdps, maximumRdps, row.Rdps.ToString("N1"), new Vector4(0.55f, 0.38f, 0.95f, 0.9f)); break;
+				case SummaryDisplayColumn.TotalDamage: TextColumn(index, player.TotalDamage.ToString("N0")); break;
 				case SummaryDisplayColumn.Critical: TextColumn(index, Percent(player.CriticalRate)); break;
 				case SummaryDisplayColumn.DirectHit: TextColumn(index, Percent(player.DirectHitRate)); break;
 				case SummaryDisplayColumn.CriticalDirectHit: TextColumn(index, Percent(player.CriticalDirectHitRate)); break;
@@ -1062,8 +1119,13 @@ public sealed class MainWindow : Window, IDisposable
 		PhaseRecord phase = row.Phase;
 		IncomingDamageEvent damageEvent = row.DamageEvent;
 		ImGui.TableNextRow();
+		if (damageEvent.IsFatal)
+		{
+			ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.ColorConvertFloat4ToU32(new Vector4(0.75f, 0.06f, 0.08f, 0.82f)));
+		}
 		TextColumn(0, phase.Number.ToString());
-		TextColumn(1, damageEvent.PlayerName);
+		uint jobId = phase.Players.TryGetValue(damageEvent.PlayerEntityId, out PlayerPhaseStatistics? player) ? player.JobId : 0;
+		DrawPlayerNameColumn(1, damageEvent.IsFatal ? $"{damageEvent.PlayerName} [戦闘不能]" : damageEvent.PlayerName, jobId);
 		TextColumn(2, FormatElapsed(phase.StartedAt, encounterStart));
 		TextColumn(3, FormatElapsed(phase.EndedAt ?? damageEvent.Timestamp, encounterStart));
 		ProgressColumn(4, damageEvent.Amount, maximumAmount, damageEvent.Amount.ToString("N0"), new Vector4(0.92f, 0.29f, 0.22f, 0.9f));
@@ -1355,18 +1417,15 @@ public sealed class MainWindow : Window, IDisposable
 	{
 		ImGui.TableSetColumnIndex(column);
 		DrawStatusGroup("エネミーバフ：", statuses.Where(status => status.Side == CombatStatusSide.Enemy && status.Kind == CombatStatusKind.Buff));
-		ImGui.SameLine(0f, 4f);
-		DrawStatusGroup(" / デバフ：", statuses.Where(status => status.Side == CombatStatusSide.Enemy && status.Kind == CombatStatusKind.Debuff));
+		DrawStatusGroup("エネミーデバフ：", statuses.Where(status => status.Side == CombatStatusSide.Enemy && status.Kind == CombatStatusKind.Debuff));
 		DrawStatusGroup("自身のバフ：", statuses.Where(status => status.Side == CombatStatusSide.Self && status.Kind == CombatStatusKind.Buff));
-		ImGui.SameLine(0f, 4f);
-		DrawStatusGroup(" / デバフ：", statuses.Where(status => status.Side == CombatStatusSide.Self && status.Kind == CombatStatusKind.Debuff));
+		DrawStatusGroup("自身のデバフ：", statuses.Where(status => status.Side == CombatStatusSide.Self && status.Kind == CombatStatusKind.Debuff));
 	}
 
 	private static void DrawStatusGroup(string label, IEnumerable<CombatStatusSnapshot> source)
 	{
 		List<CombatStatusSnapshot> statuses = source.ToList();
 		ImGui.TextUnformatted(label);
-		ImGui.SameLine(0f, 3f);
 		if (statuses.Count == 0)
 		{
 			ImGui.TextDisabled("なし");
@@ -1381,13 +1440,18 @@ public sealed class MainWindow : Window, IDisposable
 				iconId = statusRow.Icon;
 			}
 			DrawGameIcon(iconId, status.Name);
-			string suffix = status.Stacks > 1 ? $" x{status.Stacks}" : string.Empty;
-			ImGui.TextUnformatted($"{status.Name}{suffix} ({status.RemainingSeconds:0.0}s){(index < statuses.Count - 1 ? "," : string.Empty)}");
-			if (index < statuses.Count - 1)
-			{
-				ImGui.SameLine(0f, 4f);
-			}
+			string stackSuffix = status.Stacks > 1 ? $" x{status.Stacks}" : string.Empty;
+			string barrierSuffix = status.BarrierAmount > 0 ? $" / バリア {status.BarrierAmount:N0}" : string.Empty;
+			ImGui.TextWrapped($"{status.Name}{stackSuffix} ({status.RemainingSeconds:0.0}s){barrierSuffix}");
 		}
+	}
+
+	private static void DrawPlayerNameColumn(int column, string playerName, uint jobId)
+	{
+		ImGui.TableSetColumnIndex(column);
+		uint iconId = jobId == 0 ? 0 : 62000u + jobId;
+		DrawGameIcon(iconId, playerName);
+		ImGui.TextUnformatted(playerName);
 	}
 
 	private static void DrawGameIcon(uint iconId, string tooltip)

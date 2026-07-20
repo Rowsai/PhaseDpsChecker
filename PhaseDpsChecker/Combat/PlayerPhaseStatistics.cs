@@ -11,6 +11,8 @@ public sealed class PlayerPhaseStatistics
 
 	public uint EntityId { get; }
 
+	public uint JobId { get; private set; }
+
 	public string PlayerName { get; private set; }
 
 	public long TotalDamage { get; private set; }
@@ -70,6 +72,14 @@ public sealed class PlayerPhaseStatistics
 		if (!string.IsNullOrWhiteSpace(playerName))
 		{
 			PlayerName = playerName;
+		}
+	}
+
+	internal void SetJobId(uint jobId)
+	{
+		if (jobId != 0)
+		{
+			JobId = jobId;
 		}
 	}
 

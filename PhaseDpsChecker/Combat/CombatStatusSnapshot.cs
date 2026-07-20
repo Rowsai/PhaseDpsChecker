@@ -18,4 +18,5 @@ public sealed record CombatStatusSnapshot(
 	ushort Stacks,
 	float RemainingSeconds,
 	CombatStatusSide Side = CombatStatusSide.Self,
-	CombatStatusKind Kind = CombatStatusKind.Buff);
+	CombatStatusKind Kind = CombatStatusKind.Buff,
+	uint BarrierAmount = 0);
