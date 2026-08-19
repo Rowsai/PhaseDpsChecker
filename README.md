@@ -12,9 +12,15 @@ Dalamudのカスタムプラグインリポジトリへ、次のURLを追加し�
 https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 ```
 
-### 必須プラグイン: IINACT
+### IINACT連携（任意・推奨）
 
-ACT互換集計とFFLogs用ログの生成には [IINACT](https://github.com/marzent/IINACT) を別途導入し、有効にしてください。Phase DPS CheckerはIINACT IPCへ自動接続し、IINACTの累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。
+ACT互換集計とFFLogs用ログの生成を利用する場合は、[IINACT](https://github.com/marzent/IINACT) を別途導入して有効にしてください。Phase DPS CheckerはIINACTのOverlayPlugin WebSocket接続先をIPCから自動検出し、`CombatData`の累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。WebSocketを利用できない場合はIINACTの直接IPCをフォールバックとして使用します。
+
+自動検出できない場合は、設定タブへ `ws://127.0.0.1:10500` のようなWebSocket URL、または次のような `HOST_PORT` 付きmopimopi URLを指定できます。mopimopiの画面を読み取るのではなく、URL内の接続先からIINACTの`CombatData`を直接購読します。
+
+```text
+http://proxy.iinact.com/overlay/mopimopi/?HOST_PORT=ws://127.0.0.1:10500
+```
 
 FFLogs Uploaderへは、IINACTが生成する次のフォルダー内のネットワークログを指定します。
 
@@ -22,7 +28,7 @@ FFLogs Uploaderへは、IINACTが生成する次のフォルダー内のネッ�
 %USERPROFILE%\Documents\IINACT
 ```
 
-IINACTが未導入または未接続の場合、Phase DPS Checkerは従来のActionEffect集計へフォールバックします。接続状態とログフォルダーは設定タブで確認できます。
+IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作し、従来のActionEffect集計へフォールバックします。接続方式、最終受信時刻、実際のWebSocket接続先、ログフォルダーは設定タブで確認できます。
 
 ## 機能
 
@@ -86,7 +92,7 @@ IINACTが未導入または未接続の場合、Phase DPS Checkerは従来のAct
 
 ## 注意事項
 
-IINACTとの連携は公開IPCを使用しているため、IINACTのコードやGPLv3ライセンス対象コードは本リポジトリへ同梱していません。IINACT側のログ出力を無効にした場合はFFLogs用ログが生成されません。
+IINACTとの連携は公開WebSocketとIPCのみを使用しているため、IINACTのコードやGPLv3ライセンス対象コードは本リポジトリへ同梱していません。IINACT側のログ出力を無効にした場合はFFLogs用ログが生成されません。
 
 アクション内訳、Active%、Phase境界、被弾時のバフ／デバフ詳細はDalamudのライブイベントから取得します。概要のDPS・総ダメージ・回復量・Crit/DH率と被ダメージ合計はIINACT集計を優先するため、FFXIV_ACT_Pluginのペット合算やDoTシミュレーションによって内訳の単純合計と差が出ることがあります。
 

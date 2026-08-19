@@ -1,3 +1,4 @@
+using Newtonsoft.Json.Linq;
 using PhaseDpsChecker.Combat;
 
 var tests = new (string Name, Action Run)[]
@@ -21,6 +22,9 @@ var tests = new (string Name, Action Run)[]
 	("履歴を個別に削除", DeleteIndividualHistory),
 	("履歴ファイル容量の境界判定", HistoryFileSizeThresholds),
 	("IINACT累積値をPhase差分へ変換", IinactPhaseDelta),
+	("IINACTのYOU表記をローカルプレイヤーへ対応", IinactYouAlias),
+	("IINACT CombatData JSONを解析", IinactCombatDataParsing),
+	("mopimopi URLからWebSocket接続先を解決", IinactWebSocketEndpointResolution),
 };
 
 foreach (var test in tests)
@@ -235,6 +239,71 @@ static void IinactPhaseDelta()
 	Equal(true, phase.HasIinactData, "phase marked as IINACT data");
 	aggregator.RecordAction(Event(t0.AddSeconds(11), 1, 10, "Later local event", new EffectSample(900, 999, 0, false, false)), party.Keys.ToHashSet());
 	Equal(1100L, phase.Players[1].TotalDamage, "IINACT total remains authoritative between snapshots");
+}
+
+static void IinactYouAlias()
+{
+	var t0 = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+	var party = new Dictionary<uint, string> { [1] = "Alice Example", [2] = "Bob Example" };
+	var aggregator = new CombatAggregator();
+	PhaseRecord phase = aggregator.BeginPhase(t0, party, 900);
+	var synchronizer = new IinactPhaseSynchronizer();
+	synchronizer.Begin(phase, IinactCombatSnapshot.Empty(t0));
+	var current = new IinactCombatSnapshot(1, t0.AddSeconds(10), "enc-you", true, new Dictionary<string, IinactCombatantSnapshot>(StringComparer.OrdinalIgnoreCase)
+	{
+		["YOU"] = new("YOU", 1000, 300, 200, 10, 3, null, null),
+		["Carbuncle (YOU)"] = new("Carbuncle (YOU)", 250, 0, 0, 2, 1, null, null),
+		["Bob Example"] = new("Bob Example", 500, 100, 400, 5, 2, null, null),
+	});
+	Equal(true, synchronizer.Apply(phase, current, 1), "YOU snapshot applied");
+	Equal(1250L, phase.Players[1].TotalDamage, "YOU and local pet mapped to local player");
+	Equal(300L, phase.Players[1].TotalHealing, "YOU healing mapped to local player");
+	Equal(200L, phase.IinactIncomingDamageTotals[1], "YOU incoming damage mapped to local player");
+	Equal(500L, phase.Players[2].TotalDamage, "named party member remains mapped by name");
+}
+
+static void IinactCombatDataParsing()
+{
+	JObject message = JObject.Parse("""
+	{
+	  "type": "CombatData",
+	  "Encounter": { "title": "Encounter 1" },
+	  "Combatant": {
+	    "YOU": {
+	      "name": "YOU",
+	      "damage": "12,345",
+	      "healed": "678",
+	      "damagetaken": "90",
+	      "hits": "12",
+	      "crithits": "4",
+	      "DirectHitCount": "3",
+	      "CritDirectHitCount": "2"
+	    }
+	  },
+	  "isActive": "true"
+	}
+	""");
+	IinactCombatSnapshot snapshot = IinactCombatDataParser.Parse(message, DateTime.UtcNow, 7);
+	Equal(7L, snapshot.Sequence, "parsed sequence");
+	Equal("Encounter 1", snapshot.EncounterId, "parsed encounter title");
+	Equal(true, snapshot.IsActive, "parsed active state");
+	IinactCombatantSnapshot combatant = snapshot.Combatants["YOU"];
+	Equal(12345L, combatant.Damage, "parsed formatted damage");
+	Equal(678L, combatant.Healing, "parsed healing");
+	Equal(90L, combatant.DamageTaken, "parsed incoming damage");
+	Equal(4, combatant.CriticalHits, "parsed critical hits");
+	Equal(3, combatant.DirectHits, "parsed direct hits");
+	Equal(2, combatant.CriticalDirectHits, "parsed critical direct hits");
+}
+
+static void IinactWebSocketEndpointResolution()
+{
+	const string overlayUrl = "http://proxy.iinact.com/overlay/mopimopi/?HOST_PORT=ws://127.0.0.1:10500";
+	Equal(true, IinactWebSocketEndpoint.TryResolve(overlayUrl, null, out Uri? fromOverlay, out string overlayError), $"mopimopi URL resolved: {overlayError}");
+	Equal("ws://127.0.0.1:10500/ws", fromOverlay!.ToString().TrimEnd('/'), "mopimopi HOST_PORT endpoint");
+	Equal(true, IinactWebSocketEndpoint.TryResolve(string.Empty, new Uri("ws://0.0.0.0:10501"), out Uri? discovered, out string discoveredError), $"discovered URL resolved: {discoveredError}");
+	Equal("ws://127.0.0.1:10501/ws", discovered!.ToString().TrimEnd('/'), "wildcard discovery uses loopback");
+	Equal(false, IinactWebSocketEndpoint.TryResolve("https://example.com/overlay", null, out _, out _), "overlay URL without endpoint rejected");
 }
 
 static void PhaseNumberAfterTrim()

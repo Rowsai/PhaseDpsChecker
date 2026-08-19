@@ -7,11 +7,16 @@
     <NoWarn>$(NoWarn);CS8632</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+	<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="..\PhaseDpsChecker\Combat\ActionKind.cs" Link="Combat\ActionKind.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\ActionGcdClassifier.cs" Link="Combat\ActionGcdClassifier.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\CastInterruptionParser.cs" Link="Combat\CastInterruptionParser.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\HistoryFileSizeMonitor.cs" Link="Combat\HistoryFileSizeMonitor.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\IinactCombatSnapshot.cs" Link="Combat\IinactCombatSnapshot.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\IinactCombatDataParser.cs" Link="Combat\IinactCombatDataParser.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\IinactWebSocketEndpoint.cs" Link="Combat\IinactWebSocketEndpoint.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\PhaseEndDetection.cs" Link="Combat\PhaseEndDetection.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\FuturesRewrittenPhaseController.cs" Link="Combat\FuturesRewrittenPhaseController.cs" />

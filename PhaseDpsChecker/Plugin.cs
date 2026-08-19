@@ -53,6 +53,9 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 	internal static IClientState ClientState { get; private set; }
 
 	[PluginService]
+	internal static IPlayerState PlayerState { get; private set; }
+
+	[PluginService]
 	internal static IChatGui ChatGui { get; private set; }
 
 	[PluginService]
@@ -99,7 +102,13 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 			Configuration.Version = 11;
 			Configuration.Save();
 		}
-		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, ChatGui, GameInteropProvider, Log);
+		if (Configuration.Version < 12)
+		{
+			Configuration.IinactWebSocketUrl = string.Empty;
+			Configuration.Version = 12;
+			Configuration.Save();
+		}
+		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, PlayerState, ChatGui, GameInteropProvider, Log);
 		partyOverlayWindow = new PartyOverlayWindow(Configuration, combatTracker);
 		mainWindow = new MainWindow(Configuration, combatTracker);
 		windowSystem.AddWindow(mainWindow);

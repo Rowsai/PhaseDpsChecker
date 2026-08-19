@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -15,42 +13,64 @@ internal sealed class IinactBridge : IDisposable
 	private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
 	private readonly object syncRoot = new();
 	private readonly IPluginLog log;
+	private readonly Func<string> getConfiguredWebSocketUrl;
 	private readonly ICallGateSubscriber<Version> getVersion;
 	private readonly ICallGateSubscriber<Version> getIpcVersion;
 	private readonly ICallGateSubscriber<string, bool> createSubscriber;
 	private readonly ICallGateSubscriber<string, bool> unsubscribe;
 	private readonly ICallGateProvider<JObject, bool> receiver;
 	private readonly ICallGateSubscriber<JObject, bool> sender;
+	private readonly ICallGateSubscriber<bool> getServerRunning;
+	private readonly ICallGateSubscriber<Uri?> getServerUri;
+	private readonly IinactWebSocketClient webSocket;
 	private DateTime nextRetryAt;
 	private IinactCombatSnapshot? latest;
 	private long sequence;
 	private bool receiverRegistered;
 	private bool subscriberCreated;
+	private string webSocketResolutionError = string.Empty;
+	private string lastSource = string.Empty;
 
-	public bool IsConnected { get; private set; }
+	public bool IsConnected
+	{
+		get
+		{
+			lock (syncRoot)
+			{
+				return latest != null || webSocket.IsConnected;
+			}
+		}
+	}
+
 	public Version? Version { get; private set; }
 	public string Status { get; private set; } = "IINACTへの接続待ち";
 	public string LogDirectory { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "IINACT");
+	public string WebSocketEndpoint => webSocket.Endpoint?.ToString() ?? "自動検出待ち";
 
-	public IinactBridge(IDalamudPluginInterface pluginInterface, IPluginLog log)
+	public IinactBridge(IDalamudPluginInterface pluginInterface, IPluginLog log, Func<string> getConfiguredWebSocketUrl)
 	{
 		this.log = log;
+		this.getConfiguredWebSocketUrl = getConfiguredWebSocketUrl;
 		getVersion = pluginInterface.GetIpcSubscriber<Version>("IINACT.Version");
 		getIpcVersion = pluginInterface.GetIpcSubscriber<Version>("IINACT.IpcVersion");
 		createSubscriber = pluginInterface.GetIpcSubscriber<string, bool>("IINACT.CreateSubscriber");
 		unsubscribe = pluginInterface.GetIpcSubscriber<string, bool>("IINACT.Unsubscribe");
 		receiver = pluginInterface.GetIpcProvider<JObject, bool>(SubscriberName);
 		sender = pluginInterface.GetIpcSubscriber<JObject, bool>($"IINACT.IpcProvider.{SubscriberName}");
+		getServerRunning = pluginInterface.GetIpcSubscriber<bool>("IINACT.Server.Listening");
+		getServerUri = pluginInterface.GetIpcSubscriber<Uri?>("IINACT.Server.Uri");
+		webSocket = new IinactWebSocketClient(message => Receive(message, "WebSocket"));
 	}
 
 	public void Update(DateTime now)
 	{
-		if (IsConnected || now < nextRetryAt)
+		if (now < nextRetryAt)
 		{
 			return;
 		}
 		nextRetryAt = now + RetryInterval;
 		TryConnect();
+		RefreshStatus();
 	}
 
 	public bool TryGetLatest(out IinactCombatSnapshot? snapshot)
@@ -64,6 +84,7 @@ internal sealed class IinactBridge : IDisposable
 
 	public void Dispose()
 	{
+		webSocket.Dispose();
 		if (subscriberCreated)
 		{
 			try
@@ -92,40 +113,84 @@ internal sealed class IinactBridge : IDisposable
 				Status = $"IINACT IPC {ipcVersion} は未対応です（2.x以上が必要）";
 				return;
 			}
+			TryEnsureIpcSubscriber();
+			TryEnsureWebSocket();
+		}
+		catch (Exception ex)
+		{
+			subscriberCreated = false;
+			Status = "IINACTが見つかりません。IINACTを導入・有効化してください";
+			log.Verbose(ex, "IINACTへの接続待ちです。");
+		}
+	}
 
+	private void TryEnsureIpcSubscriber()
+	{
+		try
+		{
 			if (!receiverRegistered)
 			{
-				receiver.RegisterFunc(Receive);
+				receiver.RegisterFunc(message => Receive(message, "IPC"));
 				receiverRegistered = true;
 			}
 			if (!subscriberCreated)
 			{
 				subscriberCreated = createSubscriber.InvokeFunc(SubscriberName);
+				if (!subscriberCreated)
+				{
+					unsubscribe.InvokeFunc(SubscriberName);
+					subscriberCreated = createSubscriber.InvokeFunc(SubscriberName);
+				}
 			}
-			if (!subscriberCreated)
+			if (subscriberCreated)
 			{
-				Status = "IINACTは起動していますがIPC購読を作成できませんでした";
-				return;
+				sender.InvokeAction(JObject.FromObject(new
+				{
+					call = "subscribe",
+					events = new[] { "CombatData" },
+				}));
 			}
-
-			sender.InvokeAction(JObject.FromObject(new
-			{
-				call = "subscribe",
-				events = new[] { "CombatData" }
-			}));
-			IsConnected = true;
-			Status = $"IINACT {Version} 接続済み / ACT互換集計・FFLogsログ出力";
-			log.Information("IINACT {Version} (IPC {IpcVersion}) に接続しました。", Version, ipcVersion);
 		}
 		catch (Exception ex)
 		{
-			IsConnected = false;
-			Status = "IINACTが見つかりません。IINACTを導入・有効化してください";
-			log.Verbose(ex, "IINACT IPCへの接続待ちです。");
+			subscriberCreated = false;
+			log.Verbose(ex, "IINACT IPCのCombatData購読に失敗したため、WebSocketを使用します。");
 		}
 	}
 
-	private bool Receive(JObject message)
+	private void TryEnsureWebSocket()
+	{
+		string configured = getConfiguredWebSocketUrl();
+		Uri? discovered = null;
+		bool serverRunning = false;
+		try
+		{
+			serverRunning = getServerRunning.InvokeFunc();
+			if (serverRunning)
+			{
+				discovered = getServerUri.InvokeFunc();
+			}
+		}
+		catch (Exception ex)
+		{
+			log.Verbose(ex, "IINACT WebSocket接続先の自動検出に失敗しました。");
+		}
+
+		if (string.IsNullOrWhiteSpace(configured) && !serverRunning)
+		{
+			webSocketResolutionError = "IINACTのWebSocketサーバーが停止しています";
+			return;
+		}
+		if (!IinactWebSocketEndpoint.TryResolve(configured, discovered, out Uri? endpoint, out string error) || endpoint == null)
+		{
+			webSocketResolutionError = error;
+			return;
+		}
+		webSocketResolutionError = string.Empty;
+		webSocket.EnsureConnected(endpoint);
+	}
+
+	private bool Receive(JObject message, string source)
 	{
 		try
 		{
@@ -133,12 +198,13 @@ internal sealed class IinactBridge : IDisposable
 			{
 				return true;
 			}
-			IinactCombatSnapshot snapshot = ParseCombatData(message, DateTime.UtcNow, ++sequence);
+			IinactCombatSnapshot snapshot = IinactCombatDataParser.Parse(message, DateTime.UtcNow, System.Threading.Interlocked.Increment(ref sequence));
 			lock (syncRoot)
 			{
 				latest = snapshot;
+				lastSource = source;
 			}
-			Status = $"IINACT {Version} 接続済み / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss}";
+			Status = $"IINACT {Version} / {source} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
 		}
 		catch (Exception ex)
 		{
@@ -147,63 +213,33 @@ internal sealed class IinactBridge : IDisposable
 		return true;
 	}
 
-	internal static IinactCombatSnapshot ParseCombatData(JObject message, DateTime receivedAt, long sequence)
+	private void RefreshStatus()
 	{
-		JObject encounter = message["Encounter"] as JObject ?? new JObject();
-		string encounterId = Value(encounter, "encid", "EncId", "title", "TITLE");
-		bool isActive = string.Equals(Value(message, "isActive"), "true", StringComparison.OrdinalIgnoreCase);
-		Dictionary<string, IinactCombatantSnapshot> combatants = new(StringComparer.OrdinalIgnoreCase);
-		if (message["Combatant"] is JObject combatantObject)
+		IinactCombatSnapshot? snapshot;
+		string source;
+		lock (syncRoot)
 		{
-			foreach (JProperty property in combatantObject.Properties())
-			{
-				if (property.Value is not JObject values)
-				{
-					continue;
-				}
-				string name = Value(values, "name", "Name", "NAME");
-				if (string.IsNullOrWhiteSpace(name))
-				{
-					name = property.Name;
-				}
-				combatants[name] = new IinactCombatantSnapshot(
-					name,
-					Long(values, "damage", "Damage"),
-					Long(values, "healed", "Healed"),
-					Long(values, "damagetaken", "DamageTaken"),
-					Int(values, "hits", "Hits"),
-					Int(values, "crithits", "CritHits"),
-					NullableInt(values, "DirectHitCount", "directhitcount", "directhits"),
-					NullableInt(values, "CritDirectHitCount", "critdirecthitcount", "critdirecthits"));
-			}
+			snapshot = latest;
+			source = lastSource;
 		}
-		return new IinactCombatSnapshot(sequence, receivedAt, encounterId, isActive, combatants);
-	}
-
-	private static string Value(JObject values, params string[] keys)
-	{
-		foreach (string key in keys)
+		if (snapshot != null)
 		{
-			JProperty? property = values.Property(key, StringComparison.OrdinalIgnoreCase);
-			if (property?.Value.Type is not JTokenType.Null and not JTokenType.Undefined)
-			{
-				return property.Value.ToString();
-			}
+			Status = $"IINACT {Version} / {source} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
+			return;
 		}
-		return string.Empty;
-	}
-
-	private static long Long(JObject values, params string[] keys) =>
-		long.TryParse(Value(values, keys), NumberStyles.Integer | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out long value) ? value : 0;
-
-	private static int Int(JObject values, params string[] keys) =>
-		int.TryParse(Value(values, keys), NumberStyles.Integer | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out int value) ? value : 0;
-
-	private static int? NullableInt(JObject values, params string[] keys)
-	{
-		string raw = Value(values, keys);
-		return string.IsNullOrWhiteSpace(raw)
-			? null
-			: int.TryParse(raw, NumberStyles.Integer | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out int value) ? value : null;
+		if (webSocket.IsConnected)
+		{
+			Status = $"IINACT {Version} / WebSocket接続済み / CombatData待ち";
+			return;
+		}
+		if (subscriberCreated)
+		{
+			Status = $"IINACT {Version} / IPC購読済み / CombatData待ち";
+			return;
+		}
+		string socketError = !string.IsNullOrWhiteSpace(webSocket.LastError) ? webSocket.LastError : webSocketResolutionError;
+		Status = string.IsNullOrWhiteSpace(socketError)
+			? $"IINACT {Version} / CombatData接続待ち"
+			: $"IINACT {Version} / WebSocket接続待ち: {socketError}";
 	}
 }

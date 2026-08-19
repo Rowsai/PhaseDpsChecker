@@ -220,6 +220,15 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.TextColored(
 			tracker.IsIinactConnected ? new Vector4(0.3f, 0.85f, 0.55f, 1f) : new Vector4(1f, 0.55f, 0.25f, 1f),
 			tracker.IinactStatus);
+		string webSocketUrl = configuration.IinactWebSocketUrl;
+		ImGui.SetNextItemWidth(-1f);
+		if (ImGui.InputText("WebSocket / mopimopi URL###IinactWebSocketUrl", ref webSocketUrl, 1024))
+		{
+			configuration.IinactWebSocketUrl = webSocketUrl.Trim();
+			configuration.Save();
+		}
+		ImGui.TextDisabled("空欄ならIINACTから自動検出します。ws://...、またはHOST_PORT付きmopimopi URLを指定できます。");
+		ImGui.TextWrapped($"実接続先: {tracker.IinactWebSocketEndpoint}");
 		ImGui.TextWrapped("FFLogs Uploaderへ指定するログフォルダー:");
 		ImGui.TextColored(new Vector4(0.35f, 0.75f, 1f, 1f), tracker.IinactLogDirectory);
 		if (!tracker.IsIinactConnected)

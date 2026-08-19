@@ -33,6 +33,8 @@ public sealed class CombatTracker : IDisposable
 
 	private readonly IClientState clientState;
 
+	private readonly IPlayerState playerState;
+
 	private readonly IChatGui chatGui;
 
 	private readonly IDutyState dutyState;
@@ -81,6 +83,8 @@ public sealed class CombatTracker : IDisposable
 
 	public string IinactLogDirectory => iinactBridge.LogDirectory;
 
+	public string IinactWebSocketEndpoint => iinactBridge.WebSocketEndpoint;
+
 	public bool IsDisabledForPvP => clientState.IsPvP;
 	public bool IsEnabled => configuration.IsEnabled;
 
@@ -99,7 +103,7 @@ public sealed class CombatTracker : IDisposable
 		? futuresRewrittenController.StatusLabel + (configuration.FflogsAnalyzeBase ? " / FFLogs Analyze Base β" : string.Empty)
 		: Aggregator.CurrentPhase == null ? "通常計測：開始待ち" : "通常計測：計測中";
 
-	public CombatTracker(Configuration configuration, IFramework framework, IDataManager dataManager, IObjectTable objectTable, IPartyList partyList, IDutyState dutyState, ICondition condition, IClientState clientState, IChatGui chatGui, IGameInteropProvider interopProvider, IPluginLog log)
+	public CombatTracker(Configuration configuration, IFramework framework, IDataManager dataManager, IObjectTable objectTable, IPartyList partyList, IDutyState dutyState, ICondition condition, IClientState clientState, IPlayerState playerState, IChatGui chatGui, IGameInteropProvider interopProvider, IPluginLog log)
 	{
 		this.configuration = configuration;
 		this.framework = framework;
@@ -107,6 +111,7 @@ public sealed class CombatTracker : IDisposable
 		this.objectTable = objectTable;
 		this.condition = condition;
 		this.clientState = clientState;
+		this.playerState = playerState;
 		this.chatGui = chatGui;
 		this.dutyState = dutyState;
 		this.log = log;
@@ -122,7 +127,7 @@ public sealed class CombatTracker : IDisposable
 		}
 		Roster = new PartyRoster(configuration, partyList, objectTable);
 		raidBuffCalculator = new RaidBuffContributionCalculator(dataManager, objectTable, Roster);
-		iinactBridge = new IinactBridge(Plugin.PluginInterface, log);
+		iinactBridge = new IinactBridge(Plugin.PluginInterface, log, () => configuration.IinactWebSocketUrl);
 		try
 		{
 			capture = new ActionEffectCapture(interopProvider, log, configuration.IsEnabled);
@@ -1105,7 +1110,7 @@ public sealed class CombatTracker : IDisposable
 	{
 		if (iinactBridge.TryGetLatest(out IinactCombatSnapshot? snapshot) && snapshot != null && snapshot.Sequence > phase.IinactSequence)
 		{
-			iinactSynchronizer.Apply(phase, snapshot);
+			iinactSynchronizer.Apply(phase, snapshot, playerState.IsLoaded ? playerState.EntityId : 0u);
 		}
 	}
 }

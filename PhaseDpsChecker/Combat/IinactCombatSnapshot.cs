@@ -36,21 +36,26 @@ internal sealed class IinactPhaseSynchronizer
 		phase.MarkIinactSynchronized(baseline.Sequence, hasData: false);
 	}
 
-	public bool Apply(PhaseRecord phase, IinactCombatSnapshot current)
+	public bool Apply(PhaseRecord phase, IinactCombatSnapshot current, uint localPlayerEntityId = 0)
 	{
 		if (!baselines.TryGetValue(phase, out IinactCombatSnapshot? baseline) || current.Combatants.Count == 0)
 		{
 			return false;
 		}
 
+		if (localPlayerEntityId == 0 && phase.Players.Count == 1)
+		{
+			localPlayerEntityId = phase.Players.Keys.Single();
+		}
 		bool sameEncounter = string.IsNullOrWhiteSpace(baseline.EncounterId)
 			|| string.IsNullOrWhiteSpace(current.EncounterId)
 			|| string.Equals(baseline.EncounterId, current.EncounterId, StringComparison.Ordinal);
 		foreach (PlayerPhaseStatistics player in phase.Players.Values)
 		{
-			IinactCombatantSnapshot currentValue = SumForPlayer(current.Combatants.Values, player.PlayerName);
+			bool isLocalPlayer = player.EntityId == localPlayerEntityId;
+			IinactCombatantSnapshot currentValue = SumForPlayer(current.Combatants.Values, player.PlayerName, isLocalPlayer);
 			IinactCombatantSnapshot baselineValue = sameEncounter
-				? SumForPlayer(baseline.Combatants.Values, player.PlayerName)
+				? SumForPlayer(baseline.Combatants.Values, player.PlayerName, isLocalPlayer)
 				: Zero(player.PlayerName);
 			long damage = PositiveDelta(currentValue.Damage, baselineValue.Damage);
 			long healing = PositiveDelta(currentValue.Healing, baselineValue.Healing);
@@ -71,11 +76,11 @@ internal sealed class IinactPhaseSynchronizer
 
 	public void Clear() => baselines.Clear();
 
-	private static IinactCombatantSnapshot SumForPlayer(IEnumerable<IinactCombatantSnapshot> combatants, string playerName)
+	private static IinactCombatantSnapshot SumForPlayer(IEnumerable<IinactCombatantSnapshot> combatants, string playerName, bool isLocalPlayer)
 	{
 		string normalizedPlayer = NormalizeName(playerName);
 		List<IinactCombatantSnapshot> matches = combatants
-			.Where(combatant => BelongsToPlayer(combatant.Name, normalizedPlayer))
+			.Where(combatant => BelongsToPlayer(combatant.Name, normalizedPlayer, isLocalPlayer))
 			.ToList();
 		if (matches.Count == 0)
 		{
@@ -93,11 +98,13 @@ internal sealed class IinactPhaseSynchronizer
 			SumNullable(matches.Select(value => value.CriticalDirectHits)));
 	}
 
-	private static bool BelongsToPlayer(string combatantName, string normalizedPlayer)
+	private static bool BelongsToPlayer(string combatantName, string normalizedPlayer, bool isLocalPlayer)
 	{
 		string normalizedCombatant = NormalizeName(combatantName);
 		return string.Equals(normalizedCombatant, normalizedPlayer, StringComparison.OrdinalIgnoreCase)
-			|| normalizedCombatant.EndsWith($"({normalizedPlayer})", StringComparison.OrdinalIgnoreCase);
+			|| normalizedCombatant.EndsWith($"({normalizedPlayer})", StringComparison.OrdinalIgnoreCase)
+			|| isLocalPlayer && (string.Equals(normalizedCombatant, "YOU", StringComparison.OrdinalIgnoreCase)
+				|| normalizedCombatant.EndsWith("(YOU)", StringComparison.OrdinalIgnoreCase));
 	}
 
 	private static string NormalizeName(string value) =>
