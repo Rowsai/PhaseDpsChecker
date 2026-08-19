@@ -215,6 +215,17 @@ public sealed class MainWindow : Window, IDisposable
 		ImGui.TextColored(
 			configuration.IsEnabled ? new Vector4(0.3f, 0.85f, 0.55f, 1f) : new Vector4(1f, 0.65f, 0.25f, 1f),
 			configuration.IsEnabled ? "状態: 有効" : "状態: 無効（戦闘データを取得しません）");
+		ImGui.Spacing();
+		DrawSectionTitle("IINACT / ACT互換計測", "DPS・総ダメージ・回復・被ダメージはIINACTのACT互換集計をフェーズ差分として使用します。");
+		ImGui.TextColored(
+			tracker.IsIinactConnected ? new Vector4(0.3f, 0.85f, 0.55f, 1f) : new Vector4(1f, 0.55f, 0.25f, 1f),
+			tracker.IinactStatus);
+		ImGui.TextWrapped("FFLogs Uploaderへ指定するログフォルダー:");
+		ImGui.TextColored(new Vector4(0.35f, 0.75f, 1f, 1f), tracker.IinactLogDirectory);
+		if (!tracker.IsIinactConnected)
+		{
+			ImGui.TextDisabled("IINACT未接続時は既存のActionEffect集計へ自動的にフォールバックします。");
+		}
 
 		ImGui.Spacing();
 		DrawSectionTitle("動作モード", "コンテンツリプレイ再生時のパーティ識別方法を設定します。");
@@ -607,8 +618,11 @@ public sealed class MainWindow : Window, IDisposable
 			ImGui.EndCombo();
 		}
 
+		List<PhaseRecord> selectedIncomingPhases = availableIncomingPhases
+			.Where(phase => selectedIncomingPhaseNumber == 0 || phase.Number == selectedIncomingPhaseNumber)
+			.ToList();
 		List<IncomingRowData> rows = new List<IncomingRowData>();
-		foreach (PhaseRecord phase in availableIncomingPhases.Where(phase => selectedIncomingPhaseNumber == 0 || phase.Number == selectedIncomingPhaseNumber))
+		foreach (PhaseRecord phase in selectedIncomingPhases)
 		{
 			List<IncomingDamageEvent> phaseEvents = phase.IncomingDamageEvents
 				.Where(damageEvent => damageEvent.PlayerEntityId == selectedIncomingEntityId)
@@ -635,7 +649,10 @@ public sealed class MainWindow : Window, IDisposable
 		rows.Sort(CompareIncomingRows);
 
 		ImGui.Spacing();
-		DrawIncomingCards(rows);
+		long? iinactIncomingTotal = selectedIncomingPhases.Any(phase => phase.HasIinactData)
+			? selectedIncomingPhases.Sum(phase => phase.IinactIncomingDamageTotals.GetValueOrDefault(selectedIncomingEntityId))
+			: null;
+		DrawIncomingCards(rows, iinactIncomingTotal);
 		ImGui.Spacing();
 		if (rows.Count == 0)
 		{
@@ -1255,12 +1272,13 @@ public sealed class MainWindow : Window, IDisposable
 		]);
 	}
 
-	private static void DrawIncomingCards(IReadOnlyList<IncomingRowData> rows)
+	private static void DrawIncomingCards(IReadOnlyList<IncomingRowData> rows, long? iinactTotal)
 	{
 		List<IncomingRowData> hits = rows
 			.Where(row => row.DamageEvent.SourceEntityId != 0 || row.DamageEvent.ActionId != 0)
 			.ToList();
-		long total = hits.Sum(row => (long)row.DamageEvent.Amount);
+		long capturedTotal = hits.Sum(row => (long)row.DamageEvent.Amount);
+		long total = iinactTotal ?? capturedTotal;
 		IncomingRowData? maximum = hits.OrderByDescending(row => row.DamageEvent.Amount).FirstOrDefault();
 		string commonAction = hits
 			.GroupBy(row => row.DamageEvent.ActionName)
@@ -1269,7 +1287,7 @@ public sealed class MainWindow : Window, IDisposable
 			.Select(group => group.Key)
 			.FirstOrDefault() ?? "-";
 		DrawMetricCards([
-			("被ダメージ合計", total.ToString("N0"), new Vector4(1f, 0.42f, 0.32f, 1f)),
+			(iinactTotal.HasValue ? "被ダメージ合計 (IINACT)" : "被ダメージ合計", total.ToString("N0"), new Vector4(1f, 0.42f, 0.32f, 1f)),
 			("ヒット数", hits.Count.ToString("N0"), new Vector4(1f, 0.58f, 0.3f, 1f)),
 			("最大被ダメージ", maximum == null ? "-" : maximum.DamageEvent.Amount.ToString("N0"), new Vector4(1f, 0.35f, 0.28f, 1f)),
 			("最多攻撃", commonAction, new Vector4(0.95f, 0.55f, 0.35f, 1f))

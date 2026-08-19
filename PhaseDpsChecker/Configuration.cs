@@ -7,7 +7,7 @@ namespace PhaseDpsChecker;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 10;
+	public int Version { get; set; } = 11;
 
 	public bool IsEnabled { get; set; } = true;
 

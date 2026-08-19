@@ -42,6 +42,8 @@ public sealed class CombatTracker : IDisposable
 	private readonly ActionEffectCapture? capture;
 	private readonly CombatHistoryStore historyStore;
 	private readonly RaidBuffContributionCalculator raidBuffCalculator;
+	private readonly IinactBridge iinactBridge;
+	private readonly IinactPhaseSynchronizer iinactSynchronizer = new();
 
 	private readonly FuturesRewrittenPhaseController futuresRewrittenController = new();
 
@@ -72,6 +74,12 @@ public sealed class CombatTracker : IDisposable
 	public bool CaptureAvailable { get; }
 
 	public string? CaptureError { get; }
+
+	public bool IsIinactConnected => iinactBridge.IsConnected;
+
+	public string IinactStatus => iinactBridge.Status;
+
+	public string IinactLogDirectory => iinactBridge.LogDirectory;
 
 	public bool IsDisabledForPvP => clientState.IsPvP;
 	public bool IsEnabled => configuration.IsEnabled;
@@ -114,6 +122,7 @@ public sealed class CombatTracker : IDisposable
 		}
 		Roster = new PartyRoster(configuration, partyList, objectTable);
 		raidBuffCalculator = new RaidBuffContributionCalculator(dataManager, objectTable, Roster);
+		iinactBridge = new IinactBridge(Plugin.PluginInterface, log);
 		try
 		{
 			capture = new ActionEffectCapture(interopProvider, log, configuration.IsEnabled);
@@ -147,13 +156,14 @@ public sealed class CombatTracker : IDisposable
 			historyStore.Save(Aggregator.Histories);
 		}
 		capture?.Dispose();
+		iinactBridge.Dispose();
 	}
 
 	public void ForceEndCurrentPhase()
 	{
-		if (Aggregator.EndCurrentPhase(DateTime.UtcNow))
+		if (Aggregator.CurrentPhase != null)
 		{
-			ResetPhaseDetection();
+			EndPhase(DateTime.UtcNow);
 			if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 			{
 				futuresRewrittenController.Reset();
@@ -286,6 +296,8 @@ public sealed class CombatTracker : IDisposable
 
 	private void OnFrameworkUpdate(IFramework frameworkContext)
 	{
+		DateTime updateAt = DateTime.UtcNow;
+		iinactBridge.Update(updateAt);
 		RefreshPhaseDetectionPreset();
 		if (!configuration.IsEnabled)
 		{
@@ -332,6 +344,7 @@ public sealed class CombatTracker : IDisposable
 				ProcessPeriodicEvent(periodicEvent2, currentMembers, memberIds);
 			}
 		}
+		SyncCurrentPhaseFromIinact();
 		now = DateTime.UtcNow;
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 		{
@@ -756,6 +769,8 @@ public sealed class CombatTracker : IDisposable
 		{
 			phase.Players[entityId].SetJobId(Roster.GetJobId(entityId));
 		}
+		iinactBridge.TryGetLatest(out IinactCombatSnapshot? snapshot);
+		iinactSynchronizer.Begin(phase, snapshot);
 		anchorWasTargetable = anchorEntityId != 0 && objectTable.SearchByEntityId(anchorEntityId)?.IsTargetable == true;
 		combatLostAt = null;
 	}
@@ -940,8 +955,17 @@ public sealed class CombatTracker : IDisposable
 
 	private void EndPhase(DateTime now)
 	{
+		PhaseRecord? phase = Aggregator.CurrentPhase;
+		if (phase != null)
+		{
+			SyncPhaseFromIinact(phase);
+		}
 		if (Aggregator.EndCurrentPhase(now))
 		{
+			if (phase != null)
+			{
+				iinactSynchronizer.Forget(phase);
+			}
 			ResetPhaseDetection();
 		}
 	}
@@ -1018,6 +1042,7 @@ public sealed class CombatTracker : IDisposable
 
 	private void ArchiveCurrentCombat(CombatHistoryEndReason endReason)
 	{
+		SyncCurrentPhaseFromIinact();
 		CombatHistoryRecord combatHistoryRecord = Aggregator.ArchiveCurrent(DateTime.UtcNow, endReason);
 		if (combatHistoryRecord != null)
 		{
@@ -1028,6 +1053,7 @@ public sealed class CombatTracker : IDisposable
 		configuration.SelectedEntityId = 0u;
 		configuration.Save();
 		periodicAttributions.Clear();
+		iinactSynchronizer.Clear();
 		ResetEncounterDetection();
 		DrainPendingCapture();
 	}
@@ -1064,6 +1090,22 @@ public sealed class CombatTracker : IDisposable
 		dutyCompletionPending = false;
 		while (dialogueEvents.TryDequeue(out _))
 		{
+		}
+	}
+
+	private void SyncCurrentPhaseFromIinact()
+	{
+		if (Aggregator.CurrentPhase is PhaseRecord phase)
+		{
+			SyncPhaseFromIinact(phase);
+		}
+	}
+
+	private void SyncPhaseFromIinact(PhaseRecord phase)
+	{
+		if (iinactBridge.TryGetLatest(out IinactCombatSnapshot? snapshot) && snapshot != null && snapshot.Sequence > phase.IinactSequence)
+		{
+			iinactSynchronizer.Apply(phase, snapshot);
 		}
 	}
 }

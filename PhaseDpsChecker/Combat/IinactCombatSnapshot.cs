@@ -1,0 +1,127 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace PhaseDpsChecker.Combat;
+
+public sealed record IinactCombatantSnapshot(
+	string Name,
+	long Damage,
+	long Healing,
+	long DamageTaken,
+	int Hits,
+	int CriticalHits,
+	int? DirectHits,
+	int? CriticalDirectHits);
+
+public sealed record IinactCombatSnapshot(
+	long Sequence,
+	DateTime ReceivedAt,
+	string EncounterId,
+	bool IsActive,
+	IReadOnlyDictionary<string, IinactCombatantSnapshot> Combatants)
+{
+	public static IinactCombatSnapshot Empty(DateTime receivedAt) =>
+		new(0, receivedAt, string.Empty, false, new Dictionary<string, IinactCombatantSnapshot>(StringComparer.OrdinalIgnoreCase));
+}
+
+internal sealed class IinactPhaseSynchronizer
+{
+	private readonly Dictionary<PhaseRecord, IinactCombatSnapshot> baselines = new();
+
+	public void Begin(PhaseRecord phase, IinactCombatSnapshot? latest)
+	{
+		IinactCombatSnapshot baseline = latest ?? IinactCombatSnapshot.Empty(phase.StartedAt);
+		baselines[phase] = baseline;
+		phase.MarkIinactSynchronized(baseline.Sequence, hasData: false);
+	}
+
+	public bool Apply(PhaseRecord phase, IinactCombatSnapshot current)
+	{
+		if (!baselines.TryGetValue(phase, out IinactCombatSnapshot? baseline) || current.Combatants.Count == 0)
+		{
+			return false;
+		}
+
+		bool sameEncounter = string.IsNullOrWhiteSpace(baseline.EncounterId)
+			|| string.IsNullOrWhiteSpace(current.EncounterId)
+			|| string.Equals(baseline.EncounterId, current.EncounterId, StringComparison.Ordinal);
+		foreach (PlayerPhaseStatistics player in phase.Players.Values)
+		{
+			IinactCombatantSnapshot currentValue = SumForPlayer(current.Combatants.Values, player.PlayerName);
+			IinactCombatantSnapshot baselineValue = sameEncounter
+				? SumForPlayer(baseline.Combatants.Values, player.PlayerName)
+				: Zero(player.PlayerName);
+			long damage = PositiveDelta(currentValue.Damage, baselineValue.Damage);
+			long healing = PositiveDelta(currentValue.Healing, baselineValue.Healing);
+			long damageTaken = PositiveDelta(currentValue.DamageTaken, baselineValue.DamageTaken);
+			int hits = PositiveDelta(currentValue.Hits, baselineValue.Hits);
+			int criticalHits = PositiveDelta(currentValue.CriticalHits, baselineValue.CriticalHits);
+			int? directHits = DeltaNullable(currentValue.DirectHits, baselineValue.DirectHits);
+			int? criticalDirectHits = DeltaNullable(currentValue.CriticalDirectHits, baselineValue.CriticalDirectHits);
+
+			player.ApplyIinactTotals(damage, healing, hits, criticalHits, directHits, criticalDirectHits);
+			phase.SetIinactIncomingDamage(player.EntityId, damageTaken);
+		}
+		phase.MarkIinactSynchronized(current.Sequence);
+		return true;
+	}
+
+	public void Forget(PhaseRecord phase) => baselines.Remove(phase);
+
+	public void Clear() => baselines.Clear();
+
+	private static IinactCombatantSnapshot SumForPlayer(IEnumerable<IinactCombatantSnapshot> combatants, string playerName)
+	{
+		string normalizedPlayer = NormalizeName(playerName);
+		List<IinactCombatantSnapshot> matches = combatants
+			.Where(combatant => BelongsToPlayer(combatant.Name, normalizedPlayer))
+			.ToList();
+		if (matches.Count == 0)
+		{
+			return Zero(playerName);
+		}
+
+		return new IinactCombatantSnapshot(
+			playerName,
+			matches.Sum(value => value.Damage),
+			matches.Sum(value => value.Healing),
+			matches.Sum(value => value.DamageTaken),
+			matches.Sum(value => value.Hits),
+			matches.Sum(value => value.CriticalHits),
+			SumNullable(matches.Select(value => value.DirectHits)),
+			SumNullable(matches.Select(value => value.CriticalDirectHits)));
+	}
+
+	private static bool BelongsToPlayer(string combatantName, string normalizedPlayer)
+	{
+		string normalizedCombatant = NormalizeName(combatantName);
+		return string.Equals(normalizedCombatant, normalizedPlayer, StringComparison.OrdinalIgnoreCase)
+			|| normalizedCombatant.EndsWith($"({normalizedPlayer})", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string NormalizeName(string value) =>
+		string.Join(' ', value.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+	private static IinactCombatantSnapshot Zero(string name) => new(name, 0, 0, 0, 0, 0, 0, 0);
+
+	private static long PositiveDelta(long current, long baseline) => Math.Max(0, current - baseline);
+
+	private static int PositiveDelta(int current, int baseline) => Math.Max(0, current - baseline);
+
+	private static int? DeltaNullable(int? current, int? baseline) =>
+		current.HasValue ? Math.Max(0, current.Value - (baseline ?? 0)) : null;
+
+	private static int? SumNullable(IEnumerable<int?> values)
+	{
+		int? sum = null;
+		foreach (int? value in values)
+		{
+			if (value.HasValue)
+			{
+				sum = (sum ?? 0) + value.Value;
+			}
+		}
+		return sum;
+	}
+}

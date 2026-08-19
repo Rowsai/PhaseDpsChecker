@@ -157,6 +157,11 @@ internal sealed class CombatHistoryStore
 					incoming.Statuses.Select(status => new CombatStatusSnapshot(status.StatusId, status.Name, status.StackCount, status.RemainingSeconds, status.Side, status.Kind, status.BarrierAmount)).ToArray(),
 					incoming.IsFatal));
 			}
+			foreach (KeyValuePair<uint, long> incomingTotal in savedPhase.IinactIncomingDamageTotals)
+			{
+				phase.SetIinactIncomingDamage(incomingTotal.Key, incomingTotal.Value);
+			}
+			phase.MarkIinactSynchronized(savedPhase.IinactSequence, savedPhase.HasIinactData);
 			phases.Add(phase);
 		}
 		return new CombatHistoryRecord(history.Number, history.ArchivedAt, history.EndReason, phases);
@@ -192,6 +197,9 @@ internal sealed class CombatHistoryStore
 		public uint AnchorTargetId { get; set; }
 		public List<PlayerDto> Players { get; set; } = new();
 		public List<IncomingDamageDto> IncomingDamageEvents { get; set; } = new();
+		public Dictionary<uint, long> IinactIncomingDamageTotals { get; set; } = new();
+		public long IinactSequence { get; set; }
+		public bool HasIinactData { get; set; }
 
 		public static PhaseDto From(PhaseRecord phase) => new()
 		{
@@ -200,7 +208,10 @@ internal sealed class CombatHistoryStore
 			EndedAt = phase.EndedAt,
 			AnchorTargetId = phase.AnchorTargetId,
 			Players = phase.Players.Values.Select(PlayerDto.From).ToList(),
-			IncomingDamageEvents = phase.IncomingDamageEvents.Select(IncomingDamageDto.From).ToList()
+			IncomingDamageEvents = phase.IncomingDamageEvents.Select(IncomingDamageDto.From).ToList(),
+			IinactIncomingDamageTotals = new Dictionary<uint, long>(phase.IinactIncomingDamageTotals),
+			IinactSequence = phase.IinactSequence,
+			HasIinactData = phase.HasIinactData
 		};
 	}
 

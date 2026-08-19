@@ -12,9 +12,23 @@ Dalamudのカスタムプラグインリポジトリへ、次のURLを追加し�
 https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 ```
 
+### 必須プラグイン: IINACT
+
+ACT互換集計とFFLogs用ログの生成には [IINACT](https://github.com/marzent/IINACT) を別途導入し、有効にしてください。Phase DPS CheckerはIINACT IPCへ自動接続し、IINACTの累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。
+
+FFLogs Uploaderへは、IINACTが生成する次のフォルダー内のネットワークログを指定します。
+
+```text
+%USERPROFILE%\Documents\IINACT
+```
+
+IINACTが未導入または未接続の場合、Phase DPS Checkerは従来のActionEffect集計へフォールバックします。接続状態とログフォルダーは設定タブで確認できます。
+
 ## 機能
 
-- パーティメンバーとペット（オーナーへ合算）の敵向けダメージを集計
+- IINACT内のFFXIV_ACT_PluginによるACT互換集計をDPS、総ダメージ、回復量、Crit/DH率、被ダメージへ反映
+- IINACTが生成するFFLogs Uploader互換ネットワークログを利用可能
+- パーティメンバーとペット（オーナーへ合算）の敵向けダメージをPhaseごとの差分として集計
 - DoT / HoT の周期効果を取得
 - 着弾ダメージとDoT / HoTのtickを分離し、周期効果をステータス名の独立行として「その他 / オートアタック」へ集計
 - リミットブレイクのダメージを発動者から分離し、仮想メンバー `LIMIT BREAK` として集計
@@ -59,7 +73,8 @@ https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 
 ## 集計定義
 
-- DPS: フェーズ内の敵向け総ダメージ ÷ フェーズ秒数
+- DPS: IINACTのACT互換累積ダメージについて、Phase開始時点と現在／終了時点の差分 ÷ Phase秒数
+- 総ダメージ・総回復量・Crit/DH率・被ダメージ: IINACTの `CombatData` をPhase差分へ変換した値
 - rDPS: FFLogs方式に基づき、本人が外部シナジーから得た増加ダメージを控除し、本人が他メンバーへ与えたシナジー増加分を加算したダメージ ÷ フェーズ秒数
 - Crit/DH/Crit+DH: 敵向けダメージ効果のヒット数を母数に算出
 - 使用回数: ActionEffect 1件を1使用として算出（AoEの対象数では増えません）
@@ -70,6 +85,10 @@ https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 - H / Active%: パーティを回復した魔法／ウェポンスキル系GCDの占有区間のみをフェーズ時間で除算
 
 ## 注意事項
+
+IINACTとの連携は公開IPCを使用しているため、IINACTのコードやGPLv3ライセンス対象コードは本リポジトリへ同梱していません。IINACT側のログ出力を無効にした場合はFFLogs用ログが生成されません。
+
+アクション内訳、Active%、Phase境界、被弾時のバフ／デバフ詳細はDalamudのライブイベントから取得します。概要のDPS・総ダメージ・回復量・Crit/DH率と被ダメージ合計はIINACT集計を優先するため、FFXIV_ACT_Pluginのペット合算やDoTシミュレーションによって内訳の単純合計と差が出ることがあります。
 
 他メンバーの実スキルスピードは取得できないため、Active%はActionシートの基本リキャスト値を使う近似値です。
 

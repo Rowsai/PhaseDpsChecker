@@ -94,6 +94,11 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 			Configuration.Version = 10;
 			Configuration.Save();
 		}
+		if (Configuration.Version < 11)
+		{
+			Configuration.Version = 11;
+			Configuration.Save();
+		}
 		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, ChatGui, GameInteropProvider, Log);
 		partyOverlayWindow = new PartyOverlayWindow(Configuration, combatTracker);
 		mainWindow = new MainWindow(Configuration, combatTracker);

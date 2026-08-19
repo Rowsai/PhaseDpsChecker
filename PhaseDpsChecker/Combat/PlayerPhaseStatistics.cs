@@ -8,6 +8,18 @@ public sealed class PlayerPhaseStatistics
 	private readonly List<(DateTime Start, DateTime End)> gcdIntervals = new List<(DateTime, DateTime)>();
 	private readonly List<(DateTime Start, DateTime End)> damageGcdIntervals = new List<(DateTime, DateTime)>();
 	private readonly List<(DateTime Start, DateTime End)> healingGcdIntervals = new List<(DateTime, DateTime)>();
+	private long capturedTotalDamage;
+	private long capturedTotalHealing;
+	private int capturedDamageHitCount;
+	private int capturedCriticalDamageHits;
+	private int capturedDirectDamageHits;
+	private int capturedCriticalDirectDamageHits;
+	private long? iinactTotalDamage;
+	private long? iinactTotalHealing;
+	private int? iinactDamageHitCount;
+	private int? iinactCriticalDamageHits;
+	private int? iinactDirectDamageHits;
+	private int? iinactCriticalDirectDamageHits;
 
 	public uint EntityId { get; }
 
@@ -15,9 +27,9 @@ public sealed class PlayerPhaseStatistics
 
 	public string PlayerName { get; private set; }
 
-	public long TotalDamage { get; private set; }
+	public long TotalDamage => iinactTotalDamage ?? capturedTotalDamage;
 
-	public long TotalHealing { get; private set; }
+	public long TotalHealing => iinactTotalHealing ?? capturedTotalHealing;
 
 	public double ExternalBuffDamageReceived { get; private set; }
 
@@ -29,13 +41,13 @@ public sealed class PlayerPhaseStatistics
 
 	public int UnbuffedDirectHits { get; private set; }
 
-	public int DamageHitCount { get; private set; }
+	public int DamageHitCount => iinactDamageHitCount ?? capturedDamageHitCount;
 
-	public int CriticalDamageHits { get; private set; }
+	public int CriticalDamageHits => iinactCriticalDamageHits ?? capturedCriticalDamageHits;
 
-	public int DirectDamageHits { get; private set; }
+	public int DirectDamageHits => iinactDirectDamageHits ?? capturedDirectDamageHits;
 
-	public int CriticalDirectDamageHits { get; private set; }
+	public int CriticalDirectDamageHits => iinactCriticalDirectDamageHits ?? capturedCriticalDirectDamageHits;
 
 	public uint MaximumDamage { get; private set; }
 
@@ -108,19 +120,19 @@ public sealed class PlayerPhaseStatistics
 
 	internal void AddDamage(string actionName, ActionStatistics action, EffectSample effect)
 	{
-		TotalDamage += effect.Damage;
-		DamageHitCount++;
+		capturedTotalDamage += effect.Damage;
+		capturedDamageHitCount++;
 		if (effect.Critical)
 		{
-			CriticalDamageHits++;
+			capturedCriticalDamageHits++;
 		}
 		if (effect.DirectHit)
 		{
-			DirectDamageHits++;
+			capturedDirectDamageHits++;
 		}
 		if (effect.Critical && effect.DirectHit)
 		{
-			CriticalDirectDamageHits++;
+			capturedCriticalDirectDamageHits++;
 		}
 		if (effect.Damage > MaximumDamage)
 		{
@@ -132,7 +144,7 @@ public sealed class PlayerPhaseStatistics
 
 	internal void AddHealing(ActionStatistics action, EffectSample effect)
 	{
-		TotalHealing += effect.Healing;
+		capturedTotalHealing += effect.Healing;
 		action.AddHealing(effect);
 	}
 
@@ -140,6 +152,28 @@ public sealed class PlayerPhaseStatistics
 	{
 		ExternalBuffDamageReceived += Math.Max(0.0, externalBuffDamageReceived);
 		RaidBuffDamageGranted += Math.Max(0.0, raidBuffDamageGranted);
+	}
+
+	internal void ApplyIinactTotals(
+		long totalDamage,
+		long totalHealing,
+		int damageHitCount,
+		int criticalDamageHits,
+		int? directDamageHits,
+		int? criticalDirectDamageHits)
+	{
+		iinactTotalDamage = Math.Max(0, totalDamage);
+		iinactTotalHealing = Math.Max(0, totalHealing);
+		iinactDamageHitCount = Math.Max(0, damageHitCount);
+		iinactCriticalDamageHits = Math.Clamp(criticalDamageHits, 0, iinactDamageHitCount.Value);
+		if (directDamageHits.HasValue)
+		{
+			iinactDirectDamageHits = Math.Clamp(directDamageHits.Value, 0, iinactDamageHitCount.Value);
+		}
+		if (criticalDirectDamageHits.HasValue)
+		{
+			iinactCriticalDirectDamageHits = Math.Clamp(criticalDirectDamageHits.Value, 0, iinactDamageHitCount.Value);
+		}
 	}
 
 	internal void AddUnbuffedObservation(EffectSample effect, bool hasExternalCriticalBuff, bool hasExternalDirectHitBuff)
@@ -210,17 +244,23 @@ public sealed class PlayerPhaseStatistics
 		IEnumerable<(DateTime Start, DateTime End)> restoredDamageGcdIntervals,
 		IEnumerable<(DateTime Start, DateTime End)> restoredHealingGcdIntervals)
 	{
-		TotalDamage = totalDamage;
-		TotalHealing = totalHealing;
+		capturedTotalDamage = totalDamage;
+		capturedTotalHealing = totalHealing;
+		iinactTotalDamage = null;
+		iinactTotalHealing = null;
 		ExternalBuffDamageReceived = externalBuffDamageReceived;
 		RaidBuffDamageGranted = raidBuffDamageGranted;
 		UnbuffedHitCount = unbuffedHitCount;
 		UnbuffedCriticalHits = unbuffedCriticalHits;
 		UnbuffedDirectHits = unbuffedDirectHits;
-		DamageHitCount = damageHitCount;
-		CriticalDamageHits = criticalDamageHits;
-		DirectDamageHits = directDamageHits;
-		CriticalDirectDamageHits = criticalDirectDamageHits;
+		capturedDamageHitCount = damageHitCount;
+		capturedCriticalDamageHits = criticalDamageHits;
+		capturedDirectDamageHits = directDamageHits;
+		capturedCriticalDirectDamageHits = criticalDirectDamageHits;
+		iinactDamageHitCount = null;
+		iinactCriticalDamageHits = null;
+		iinactDirectDamageHits = null;
+		iinactCriticalDirectDamageHits = null;
 		MaximumDamage = maximumDamage;
 		MaximumDamageAction = maximumDamageAction;
 		gcdIntervals.Clear();

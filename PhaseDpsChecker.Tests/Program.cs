@@ -20,6 +20,7 @@ var tests = new (string Name, Action Run)[]
 	("詠唱中断ログの解析と集計", InterruptedCastCounting),
 	("履歴を個別に削除", DeleteIndividualHistory),
 	("履歴ファイル容量の境界判定", HistoryFileSizeThresholds),
+	("IINACT累積値をPhase差分へ変換", IinactPhaseDelta),
 };
 
 foreach (var test in tests)
@@ -129,6 +130,8 @@ static void HistoryPersistenceRoundTrip()
 		aggregator.RecordAction(Event(t0, 1, 10, "Drill", new EffectSample(900, 5000, 0, true, true), true, 2.5), partyIds);
 		aggregator.RecordInterruptedCast(1, "Machinist", 20, "ケアルガ", ActionKind.Magic, isHealingAction: true);
 		aggregator.RecordIncomingDamage(new IncomingDamageEvent(t0.AddSeconds(2), 1, "Machinist", 900, "Enemy", 20, "Attack", 1000, [new CombatStatusSnapshot(1191, "Rampart", 0, 8)]), partyIds);
+		aggregator.CurrentPhase!.SetIinactIncomingDamage(1, 1234);
+		aggregator.CurrentPhase.MarkIinactSynchronized(7);
 		aggregator.ArchiveCurrent(t0.AddSeconds(10), CombatHistoryEndReason.Wipe);
 
 		var store = new CombatHistoryStore(() => directory, directory, (_, _) => { });
@@ -142,6 +145,8 @@ static void HistoryPersistenceRoundTrip()
 		Equal(true, player.Actions[20].IsHealingAction, "healing action classification restored");
 		Near(0.25, player.DamageActiveRate(t0, t0.AddSeconds(10)), 0.001, "damage active restored");
 		Equal(1000u, loaded.Single().Phases.Single().IncomingDamageEvents.Single().Amount, "incoming damage restored");
+		Equal(1234L, loaded.Single().Phases.Single().IinactIncomingDamageTotals[1], "IINACT incoming total restored");
+		Equal(true, loaded.Single().Phases.Single().HasIinactData, "IINACT source marker restored");
 	}
 	finally
 	{
@@ -198,6 +203,38 @@ static void HistoryFileSizeThresholds()
 	Equal(HistoryFileSizeLevel.Warning, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.WarningThresholdBytes + 1), "over 500 MB warning");
 	Equal(HistoryFileSizeLevel.Warning, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.DangerThresholdBytes), "1 GB is still warning");
 	Equal(HistoryFileSizeLevel.Danger, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.DangerThresholdBytes + 1), "over 1 GB danger");
+}
+
+static void IinactPhaseDelta()
+{
+	var t0 = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+	var party = new Dictionary<uint, string> { [1] = "Alice Example", [2] = "Bob Example" };
+	var aggregator = new CombatAggregator();
+	PhaseRecord phase = aggregator.BeginPhase(t0, party, 900);
+	var synchronizer = new IinactPhaseSynchronizer();
+	var baseline = new IinactCombatSnapshot(1, t0, "enc-1", true, new Dictionary<string, IinactCombatantSnapshot>(StringComparer.OrdinalIgnoreCase)
+	{
+		["Alice Example"] = new("Alice Example", 100, 20, 10, 1, 0, 0, 0),
+		["Carbuncle (Alice Example)"] = new("Carbuncle (Alice Example)", 50, 0, 0, 1, 0, null, null),
+	});
+	synchronizer.Begin(phase, baseline);
+	var current = new IinactCombatSnapshot(2, t0.AddSeconds(10), "enc-1", true, new Dictionary<string, IinactCombatantSnapshot>(StringComparer.OrdinalIgnoreCase)
+	{
+		["Alice Example"] = new("Alice Example", 1100, 520, 410, 11, 4, 5, 2),
+		["Carbuncle (Alice Example)"] = new("Carbuncle (Alice Example)", 150, 0, 0, 3, 1, null, null),
+		["Bob Example"] = new("Bob Example", 500, 100, 200, 5, 2, 1, 1),
+	});
+	Equal(true, synchronizer.Apply(phase, current), "IINACT snapshot applied");
+	Equal(1100L, phase.Players[1].TotalDamage, "owner and pet damage delta");
+	Equal(500L, phase.Players[1].TotalHealing, "healing delta");
+	Equal(12, phase.Players[1].DamageHitCount, "hit delta");
+	Equal(5, phase.Players[1].CriticalDamageHits, "critical delta");
+	Equal(5, phase.Players[1].DirectDamageHits, "direct hit delta");
+	Equal(400L, phase.IinactIncomingDamageTotals[1], "incoming damage delta");
+	Equal(500L, phase.Players[2].TotalDamage, "second player damage");
+	Equal(true, phase.HasIinactData, "phase marked as IINACT data");
+	aggregator.RecordAction(Event(t0.AddSeconds(11), 1, 10, "Later local event", new EffectSample(900, 999, 0, false, false)), party.Keys.ToHashSet());
+	Equal(1100L, phase.Players[1].TotalDamage, "IINACT total remains authoritative between snapshots");
 }
 
 static void PhaseNumberAfterTrim()

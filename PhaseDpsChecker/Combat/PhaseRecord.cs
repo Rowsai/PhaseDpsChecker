@@ -17,6 +17,12 @@ public sealed class PhaseRecord
 
 	public List<IncomingDamageEvent> IncomingDamageEvents { get; } = new List<IncomingDamageEvent>();
 
+	public Dictionary<uint, long> IinactIncomingDamageTotals { get; } = new Dictionary<uint, long>();
+
+	public long IinactSequence { get; private set; }
+
+	public bool HasIinactData { get; private set; }
+
 	public bool IsActive => !EndedAt.HasValue;
 
 	public PhaseRecord(int number, DateTime startedAt, uint anchorTargetId)
@@ -53,5 +59,16 @@ public sealed class PhaseRecord
 	internal void AddIncomingDamage(IncomingDamageEvent damageEvent)
 	{
 		IncomingDamageEvents.Add(damageEvent);
+	}
+
+	internal void SetIinactIncomingDamage(uint entityId, long amount)
+	{
+		IinactIncomingDamageTotals[entityId] = Math.Max(0, amount);
+	}
+
+	internal void MarkIinactSynchronized(long sequence, bool hasData = true)
+	{
+		IinactSequence = Math.Max(IinactSequence, sequence);
+		HasIinactData |= hasData;
 	}
 }

@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.10.0</Version>
+	<Version>0.11.0</Version>
     <AssemblyName>PhaseDpsChecker</AssemblyName>
     <RootNamespace>PhaseDpsChecker</RootNamespace>
     <Authors>Rowsai</Authors>
@@ -12,4 +12,7 @@
     <NoWarn>$(NoWarn);CS8632</NoWarn>
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+	</ItemGroup>
 </Project>
