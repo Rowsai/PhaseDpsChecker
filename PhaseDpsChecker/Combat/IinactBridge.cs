@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -23,6 +24,9 @@ internal sealed class IinactBridge : IDisposable
 	private readonly ICallGateSubscriber<bool> getServerRunning;
 	private readonly ICallGateSubscriber<Uri?> getServerUri;
 	private readonly IinactWebSocketClient webSocket;
+	private readonly IinactEncounterLifecycle encounterLifecycle = new();
+	private readonly ConcurrentQueue<IinactCombatSnapshot> encounterStarts = new();
+	private readonly ConcurrentQueue<IinactCombatSnapshot> encounterEnds = new();
 	private DateTime nextRetryAt;
 	private IinactCombatSnapshot? latest;
 	private long sequence;
@@ -30,6 +34,7 @@ internal sealed class IinactBridge : IDisposable
 	private bool subscriberCreated;
 	private string webSocketResolutionError = string.Empty;
 	private string lastSource = string.Empty;
+	private DateTime lastSourceReceivedAt;
 
 	public bool IsConnected
 	{
@@ -81,6 +86,20 @@ internal sealed class IinactBridge : IDisposable
 			return snapshot != null;
 		}
 	}
+
+	public bool HasFreshActiveCombatData(DateTime now)
+	{
+		lock (syncRoot)
+		{
+			return latest is { IsActive: true } snapshot && now - snapshot.ReceivedAt <= TimeSpan.FromSeconds(15);
+		}
+	}
+
+	public bool TryTakeEncounterStart(out IinactCombatSnapshot? snapshot) =>
+		TryTakeLatest(encounterStarts, out snapshot);
+
+	public bool TryTakeEncounterEnd(out IinactCombatSnapshot? snapshot) =>
+		TryTakeLatest(encounterEnds, out snapshot);
 
 	public void Dispose()
 	{
@@ -198,11 +217,29 @@ internal sealed class IinactBridge : IDisposable
 			{
 				return true;
 			}
-			IinactCombatSnapshot snapshot = IinactCombatDataParser.Parse(message, DateTime.UtcNow, System.Threading.Interlocked.Increment(ref sequence));
+			DateTime receivedAt = DateTime.UtcNow;
+			IinactCombatSnapshot snapshot = IinactCombatDataParser.Parse(message, receivedAt, System.Threading.Interlocked.Increment(ref sequence));
+			IinactEncounterTransition transition;
 			lock (syncRoot)
 			{
+				if (!string.IsNullOrWhiteSpace(lastSource)
+					&& !string.Equals(lastSource, source, StringComparison.Ordinal)
+					&& receivedAt - lastSourceReceivedAt <= TimeSpan.FromSeconds(15))
+				{
+					return true;
+				}
+				transition = encounterLifecycle.Observe(snapshot);
 				latest = snapshot;
 				lastSource = source;
+				lastSourceReceivedAt = receivedAt;
+			}
+			if (transition == IinactEncounterTransition.Started)
+			{
+				encounterStarts.Enqueue(snapshot);
+			}
+			else if (transition == IinactEncounterTransition.Ended)
+			{
+				encounterEnds.Enqueue(snapshot);
 			}
 			Status = $"IINACT {Version} / {source} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
 		}
@@ -211,6 +248,16 @@ internal sealed class IinactBridge : IDisposable
 			log.Warning(ex, "IINACT CombatDataの読み取りに失敗しました。");
 		}
 		return true;
+	}
+
+	private static bool TryTakeLatest(ConcurrentQueue<IinactCombatSnapshot> queue, out IinactCombatSnapshot? snapshot)
+	{
+		snapshot = null;
+		while (queue.TryDequeue(out IinactCombatSnapshot? candidate))
+		{
+			snapshot = candidate;
+		}
+		return snapshot != null;
 	}
 
 	private void RefreshStatus()

@@ -14,7 +14,7 @@ https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 
 ### IINACT連携（任意・推奨）
 
-ACT互換集計とFFLogs用ログの生成を利用する場合は、[IINACT](https://github.com/marzent/IINACT) を別途導入して有効にしてください。Phase DPS CheckerはIINACTのOverlayPlugin WebSocket接続先をIPCから自動検出し、`CombatData`の累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。WebSocketを利用できない場合はIINACTの直接IPCをフォールバックとして使用します。
+ACT互換集計とFFLogs用ログの生成を利用する場合は、[IINACT](https://github.com/marzent/IINACT) を別途導入して有効にしてください。Phase DPS CheckerはIINACTのOverlayPlugin WebSocket接続先をIPCから自動検出し、`CombatData`の累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。CombatDataの開始通知から通常計測を開始し、`isActive`が`true`から`false`へ変わった通知をIINACT ENDとして扱います。WebSocketを利用できない場合はIINACTの直接IPCをフォールバックとして使用します。
 
 自動検出できない場合は、設定タブへ `ws://127.0.0.1:10500` のようなWebSocket URL、または次のような `HOST_PORT` 付きmopimopi URLを指定できます。mopimopiの画面を読み取るのではなく、URL内の接続先からIINACTの`CombatData`を直接購読します。
 
@@ -32,7 +32,7 @@ IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作
 
 ## 機能
 
-- IINACT内のFFXIV_ACT_PluginによるACT互換集計をDPS、総ダメージ、回復量、Crit/DH率、被ダメージへ反映
+- IINACT内のFFXIV_ACT_PluginによるACT互換集計をDPS、総ダメージ、HPS、総回復量、被ダメージ、ヒット数、Crit数、Crit/DH率へ反映
 - IINACTが生成するFFLogs Uploader互換ネットワークログを利用可能
 - パーティメンバーとペット（オーナーへ合算）の敵向けダメージをPhaseごとの差分として集計
 - DoT / HoT の周期効果を取得
@@ -43,14 +43,14 @@ IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作
 - アンカー対象を倒した攻撃またはDoT tickを検知した場合は、そのイベント時刻で即座にフェーズを終了
 - 現在のコンテンツ情報を自動取得し、「絶妖星乱舞」では専用フェーズ判定、それ以外では通常計測へ自動設定
 - コンテンツリプレイ動作モードでは、Dark KnightやWhite Mageなどジョブ名で表示されるメンバーも集計
-- 全体表示: Phase、ジョブアイコン付きプレイヤー名、開始時間、終了時間、DPS、rDPS、総ダメージ、Crit%、DH%、Crit+DH%、最大ダメージ／アクション、Active%、D / Active%、H / Active%
+- 全体表示: Phase、ジョブアイコン付きプレイヤー名、開始時間、終了時間、DPS、rDPS、総ダメージ、HPS、総回復量、被ダメージ、ヒット数、Crit数、Crit%、DH%、Crit+DH%、最大ダメージ／アクション、Active%、D / Active%、H / Active%
 - 設定タブのチェックボックスで概要表とパーティオーバーレイの表示列を選択（初期値は全項目表示）
 - アクション内訳のアクション名へゲーム内アイコンを表示
 - 計測中のPhase行を青色で強調表示
 - 設定でJOBアイコン付きの現在Phase全体集計オーバーレイを表示
 - 個人表示: ウェポンスキル、アビリティ、魔法、回復魔法、回復アビリティ、その他の使用回数・詠唱失敗数・ダメージ・回復量
 - `プレイヤーは「アクション」の詠唱を中断した。` 形式のバトルログから、パーティ／リプレイメンバーの魔法詠唱失敗数を集計
-- 全滅またはコンテンツクリア時に現在表示をクリアし、全フェーズを戦闘履歴へ自動保存
+- IINACT END、全滅、またはコンテンツクリア時に計測を終了して現在表示をクリアし、全フェーズを戦闘履歴へ自動保存
 - 履歴表示タブは履歴番号の昇順で表示し、Phase全体／Phase個別、パーティ全体／メンバー個人／履歴全体のTotal DPSを選択
 - 履歴削除ポップアップで複数の戦闘履歴を選択して一括削除
 - 全体表は Phase 昇順・DPS 降順を初期値として、各ヘッダのクリックで並び替え
@@ -79,8 +79,8 @@ IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作
 
 ## 集計定義
 
-- DPS: IINACTのACT互換累積ダメージについて、Phase開始時点と現在／終了時点の差分 ÷ Phase秒数
-- 総ダメージ・総回復量・Crit/DH率・被ダメージ: IINACTの `CombatData` をPhase差分へ変換した値
+- DPS / HPS: IINACTのACT互換累積ダメージ／累積回復量について、Phase開始時点と現在／終了時点の差分 ÷ Phase秒数
+- 総ダメージ・総回復量・被ダメージ・ヒット数・Crit数・Crit/DH率: IINACTの `CombatData` をPhase差分へ変換した値。ペット行はオーナー行へ合算
 - rDPS: FFLogs方式に基づき、本人が外部シナジーから得た増加ダメージを控除し、本人が他メンバーへ与えたシナジー増加分を加算したダメージ ÷ フェーズ秒数
 - Crit/DH/Crit+DH: 敵向けダメージ効果のヒット数を母数に算出
 - 使用回数: ActionEffect 1件を1使用として算出（AoEの対象数では増えません）

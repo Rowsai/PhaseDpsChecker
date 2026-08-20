@@ -12,14 +12,17 @@ public sealed record IinactCombatantSnapshot(
 	int Hits,
 	int CriticalHits,
 	int? DirectHits,
-	int? CriticalDirectHits);
+	int? CriticalDirectHits,
+	double Dps = 0,
+	double Hps = 0);
 
 public sealed record IinactCombatSnapshot(
 	long Sequence,
 	DateTime ReceivedAt,
 	string EncounterId,
 	bool IsActive,
-	IReadOnlyDictionary<string, IinactCombatantSnapshot> Combatants)
+	IReadOnlyDictionary<string, IinactCombatantSnapshot> Combatants,
+	double DurationSeconds = 0)
 {
 	public static IinactCombatSnapshot Empty(DateTime receivedAt) =>
 		new(0, receivedAt, string.Empty, false, new Dictionary<string, IinactCombatantSnapshot>(StringComparer.OrdinalIgnoreCase));
@@ -95,7 +98,9 @@ internal sealed class IinactPhaseSynchronizer
 			matches.Sum(value => value.Hits),
 			matches.Sum(value => value.CriticalHits),
 			SumNullable(matches.Select(value => value.DirectHits)),
-			SumNullable(matches.Select(value => value.CriticalDirectHits)));
+			SumNullable(matches.Select(value => value.CriticalDirectHits)),
+			matches.Sum(value => value.Dps),
+			matches.Sum(value => value.Hps));
 	}
 
 	private static bool BelongsToPlayer(string combatantName, string normalizedPlayer, bool isLocalPlayer)

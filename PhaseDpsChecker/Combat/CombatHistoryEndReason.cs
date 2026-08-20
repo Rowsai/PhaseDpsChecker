@@ -4,5 +4,6 @@ public enum CombatHistoryEndReason
 {
 	Wipe,
 	DutyCompleted,
-	Manual
+	Manual,
+	IinactEncounterEnded,
 }

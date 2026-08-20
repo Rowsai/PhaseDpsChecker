@@ -25,6 +25,8 @@ public sealed class PartyOverlayWindow : Window
 		PlayerPhaseStatistics Player,
 		double Dps,
 		double Rdps,
+		double Hps,
+		long DamageTaken,
 		double ActiveRate,
 		double DamageActiveRate,
 		double HealingActiveRate);
@@ -74,9 +76,11 @@ public sealed class PartyOverlayWindow : Window
 		List<OverlayRow> rows = currentPhase.Players.Values
 			.Select(player => new OverlayRow(
 				currentPhase,
-					player,
-					player.Dps(currentPhase.DurationSeconds(now)),
-					player.Rdps(currentPhase.DurationSeconds(now)),
+				player,
+				player.Dps(currentPhase.DurationSeconds(now)),
+				player.Rdps(currentPhase.DurationSeconds(now)),
+				player.Hps(currentPhase.DurationSeconds(now)),
+				currentPhase.IncomingDamageTotal(player.EntityId),
 				player.ActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now)),
 				player.DamageActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now)),
 				player.HealingActiveRate(currentPhase.StartedAt, currentPhase.EffectiveEnd(now))))
@@ -121,6 +125,12 @@ public sealed class PartyOverlayWindow : Window
 				case SummaryDisplayColumn.End: TextColumn(index, row.Phase.EndedAt.HasValue ? FormatElapsed(row.Phase.EndedAt.Value, encounterStart) : $"{FormatElapsed(now, encounterStart)} (計測中)"); break;
 				case SummaryDisplayColumn.Dps: ProgressColumn(index, row.Dps, maximumDps, row.Dps.ToString("N1"), new Vector4(0.05f, 0.52f, 0.86f, 0.9f)); break;
 				case SummaryDisplayColumn.Rdps: ProgressColumn(index, row.Rdps, maximumRdps, row.Rdps.ToString("N1"), new Vector4(0.55f, 0.38f, 0.95f, 0.9f)); break;
+				case SummaryDisplayColumn.TotalDamage: TextColumn(index, row.Player.TotalDamage.ToString("N0")); break;
+				case SummaryDisplayColumn.Hps: TextColumn(index, row.Hps.ToString("N1")); break;
+				case SummaryDisplayColumn.TotalHealing: TextColumn(index, row.Player.TotalHealing.ToString("N0")); break;
+				case SummaryDisplayColumn.DamageTaken: TextColumn(index, row.DamageTaken.ToString("N0")); break;
+				case SummaryDisplayColumn.HitCount: TextColumn(index, row.Player.DamageHitCount.ToString("N0")); break;
+				case SummaryDisplayColumn.CriticalHitCount: TextColumn(index, row.Player.CriticalDamageHits.ToString("N0")); break;
 				case SummaryDisplayColumn.Critical: TextColumn(index, Percent(row.Player.CriticalRate)); break;
 				case SummaryDisplayColumn.DirectHit: TextColumn(index, Percent(row.Player.DirectHitRate)); break;
 				case SummaryDisplayColumn.CriticalDirectHit: TextColumn(index, Percent(row.Player.CriticalDirectHitRate)); break;

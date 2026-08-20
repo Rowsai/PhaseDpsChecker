@@ -331,6 +331,7 @@ public sealed class CombatTracker : IDisposable
 		Dictionary<uint, string> currentMembers = Roster.GetCurrentMembers();
 		HashSet<uint> memberIds = currentMembers.Keys.ToHashSet();
 		DateTime now = DateTime.UtcNow;
+		TryBeginNormalPhaseFromIinact(currentMembers);
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && condition[ConditionFlag.InCombat])
 		{
 			ApplyDedicatedTransition(futuresRewrittenController.OnCombatStarted(), now, currentMembers);
@@ -351,17 +352,26 @@ public sealed class CombatTracker : IDisposable
 		}
 		SyncCurrentPhaseFromIinact();
 		now = DateTime.UtcNow;
-		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
+		iinactBridge.TryTakeEncounterEnd(out IinactCombatSnapshot? endedEncounter);
+		if (endedEncounter != null && Aggregator.CurrentPhase is PhaseRecord endedPhase)
+		{
+			SyncPhaseFromIinact(endedPhase, endedEncounter);
+		}
+		if (dutyCompletionPending)
+		{
+			CompleteDuty(currentMembers, now);
+		}
+		else if (endedEncounter != null)
+		{
+			ArchiveCurrentCombat(CombatHistoryEndReason.IinactEncounterEnded, now, endedEncounter);
+		}
+		else if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate)
 		{
 			CheckDedicatedPhaseTriggers(now, currentMembers);
 		}
 		else
 		{
 			CheckForPhaseEnd(now);
-		}
-		if (dutyCompletionPending)
-		{
-			CompleteDuty(currentMembers, now);
 		}
 		Aggregator.TrimCurrentPhases(configuration.MaxPhaseHistory);
 		if (Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory))
@@ -596,7 +606,7 @@ public sealed class CombatTracker : IDisposable
 
 	private void TryEndPhaseForDefeatedAnchor(DateTime timestamp, IReadOnlyList<EffectSample> effects)
 	{
-		if (Aggregator.CurrentPhase == null || anchorTargetEntityId == 0)
+		if (Aggregator.CurrentPhase == null || anchorTargetEntityId == 0 || iinactBridge.HasFreshActiveCombatData(DateTime.UtcNow))
 		{
 			return;
 		}
@@ -766,7 +776,11 @@ public sealed class CombatTracker : IDisposable
 		return selectedEntityId;
 	}
 
-	private void BeginPhase(DateTime timestamp, IReadOnlyDictionary<uint, string> members, uint anchorEntityId)
+	private void BeginPhase(
+		DateTime timestamp,
+		IReadOnlyDictionary<uint, string> members,
+		uint anchorEntityId,
+		IinactCombatSnapshot? baselineOverride = null)
 	{
 		anchorTargetEntityId = anchorEntityId;
 		PhaseRecord phase = Aggregator.BeginPhase(timestamp, members, anchorEntityId);
@@ -774,8 +788,16 @@ public sealed class CombatTracker : IDisposable
 		{
 			phase.Players[entityId].SetJobId(Roster.GetJobId(entityId));
 		}
-		iinactBridge.TryGetLatest(out IinactCombatSnapshot? snapshot);
-		iinactSynchronizer.Begin(phase, snapshot);
+		IinactCombatSnapshot? baseline = baselineOverride;
+		if (baseline == null)
+		{
+			iinactBridge.TryGetLatest(out baseline);
+			if (baseline is { IsActive: false })
+			{
+				baseline = IinactCombatSnapshot.Empty(timestamp);
+			}
+		}
+		iinactSynchronizer.Begin(phase, baseline);
 		anchorWasTargetable = anchorEntityId != 0 && objectTable.SearchByEntityId(anchorEntityId)?.IsTargetable == true;
 		combatLostAt = null;
 	}
@@ -927,6 +949,11 @@ public sealed class CombatTracker : IDisposable
 		{
 			return;
 		}
+		if (iinactBridge.HasFreshActiveCombatData(now))
+		{
+			combatLostAt = null;
+			return;
+		}
 		DateTime valueOrDefault;
 		if (anchorTargetEntityId != 0)
 		{
@@ -1045,10 +1072,20 @@ public sealed class CombatTracker : IDisposable
 		ArchiveCurrentCombat(CombatHistoryEndReason.DutyCompleted);
 	}
 
-	private void ArchiveCurrentCombat(CombatHistoryEndReason endReason)
+	private void ArchiveCurrentCombat(
+		CombatHistoryEndReason endReason,
+		DateTime? endedAt = null,
+		IinactCombatSnapshot? finalSnapshot = null)
 	{
-		SyncCurrentPhaseFromIinact();
-		CombatHistoryRecord combatHistoryRecord = Aggregator.ArchiveCurrent(DateTime.UtcNow, endReason);
+		if (finalSnapshot != null && Aggregator.CurrentPhase is PhaseRecord phase)
+		{
+			SyncPhaseFromIinact(phase, finalSnapshot);
+		}
+		else
+		{
+			SyncCurrentPhaseFromIinact();
+		}
+		CombatHistoryRecord combatHistoryRecord = Aggregator.ArchiveCurrent(endedAt ?? DateTime.UtcNow, endReason);
 		if (combatHistoryRecord != null)
 		{
 			Aggregator.TrimArchivedHistory(configuration.MaxEncounterHistory);
@@ -1098,6 +1135,23 @@ public sealed class CombatTracker : IDisposable
 		}
 	}
 
+	private void TryBeginNormalPhaseFromIinact(IReadOnlyDictionary<uint, string> members)
+	{
+		if (members.Count == 0 || !iinactBridge.TryTakeEncounterStart(out IinactCombatSnapshot? snapshot) || snapshot == null)
+		{
+			return;
+		}
+		if (ActivePreset != PhaseDetectionPreset.Normal || Aggregator.CurrentPhase != null)
+		{
+			return;
+		}
+
+		DateTime startedAt = snapshot.ReceivedAt.AddSeconds(-Math.Max(0, snapshot.DurationSeconds));
+		BeginPhase(startedAt, members, 0, IinactCombatSnapshot.Empty(startedAt));
+		SyncPhaseFromIinact(Aggregator.CurrentPhase!, snapshot);
+		log.Information("IINACT CombatDataの開始通知から通常計測を開始しました。");
+	}
+
 	private void SyncCurrentPhaseFromIinact()
 	{
 		if (Aggregator.CurrentPhase is PhaseRecord phase)
@@ -1109,6 +1163,14 @@ public sealed class CombatTracker : IDisposable
 	private void SyncPhaseFromIinact(PhaseRecord phase)
 	{
 		if (iinactBridge.TryGetLatest(out IinactCombatSnapshot? snapshot) && snapshot != null && snapshot.Sequence > phase.IinactSequence)
+		{
+			iinactSynchronizer.Apply(phase, snapshot, playerState.IsLoaded ? playerState.EntityId : 0u);
+		}
+	}
+
+	private void SyncPhaseFromIinact(PhaseRecord phase, IinactCombatSnapshot snapshot)
+	{
+		if (snapshot.Sequence > phase.IinactSequence)
 		{
 			iinactSynchronizer.Apply(phase, snapshot, playerState.IsLoaded ? playerState.EntityId : 0u);
 		}

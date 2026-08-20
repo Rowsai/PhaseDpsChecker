@@ -75,6 +75,8 @@ public sealed class MainWindow : Window, IDisposable
 		PlayerPhaseStatistics Player,
 		double Dps,
 		double Rdps,
+		double Hps,
+		long DamageTaken,
 		double ActiveRate,
 		double DamageActiveRate,
 		double HealingActiveRate);
@@ -216,7 +218,7 @@ public sealed class MainWindow : Window, IDisposable
 			configuration.IsEnabled ? new Vector4(0.3f, 0.85f, 0.55f, 1f) : new Vector4(1f, 0.65f, 0.25f, 1f),
 			configuration.IsEnabled ? "状態: 有効" : "状態: 無効（戦闘データを取得しません）");
 		ImGui.Spacing();
-		DrawSectionTitle("IINACT / ACT互換計測", "DPS・総ダメージ・回復・被ダメージはIINACTのACT互換集計をフェーズ差分として使用します。");
+		DrawSectionTitle("IINACT / ACT互換計測", "DPS・総ダメージ・HPS・総回復量・被ダメージ・ヒット数・Crit数はIINACTのCombatDataをフェーズ差分として使用します。");
 		ImGui.TextColored(
 			tracker.IsIinactConnected ? new Vector4(0.3f, 0.85f, 0.55f, 1f) : new Vector4(1f, 0.55f, 0.25f, 1f),
 			tracker.IinactStatus);
@@ -414,7 +416,7 @@ public sealed class MainWindow : Window, IDisposable
 		IReadOnlyList<CombatHistoryRecord> histories = tracker.Aggregator.Histories;
 		if (histories.Count == 0)
 		{
-			ImGui.TextDisabled("全滅、コンテンツクリア、または手動保存後の戦闘履歴がここに表示されます。");
+			ImGui.TextDisabled("IINACT END、全滅、コンテンツクリア、または手動保存後の戦闘履歴がここに表示されます。");
 			return;
 		}
 
@@ -738,6 +740,8 @@ public sealed class MainWindow : Window, IDisposable
 				player,
 				player.Dps(phase.DurationSeconds(now)),
 				player.Rdps(phase.DurationSeconds(now)),
+				player.Hps(phase.DurationSeconds(now)),
+				phase.IncomingDamageTotal(player.EntityId),
 				player.ActiveRate(phase.StartedAt, phase.EffectiveEnd(now)),
 				player.DamageActiveRate(phase.StartedAt, phase.EffectiveEnd(now)),
 				player.HealingActiveRate(phase.StartedAt, phase.EffectiveEnd(now)))))
@@ -849,6 +853,8 @@ public sealed class MainWindow : Window, IDisposable
 		PlayerPhaseStatistics player = phase.Players[entityId];
 		double dps = player.Dps(phase.DurationSeconds(now));
 		double rdps = player.Rdps(phase.DurationSeconds(now));
+		double hps = player.Hps(phase.DurationSeconds(now));
+		long damageTaken = phase.IncomingDamageTotal(player.EntityId);
 		double activeRate = player.ActiveRate(phase.StartedAt, phase.EffectiveEnd(now));
 		double damageActiveRate = player.DamageActiveRate(phase.StartedAt, phase.EffectiveEnd(now));
 		double healingActiveRate = player.HealingActiveRate(phase.StartedAt, phase.EffectiveEnd(now));
@@ -864,7 +870,7 @@ public sealed class MainWindow : Window, IDisposable
 		{
 			SetupSummaryColumns(visibleColumns);
 			ImGui.TableHeadersRow();
-			DrawSummaryRow(new SummaryRowData(phase, player, dps, rdps, activeRate, damageActiveRate, healingActiveRate), encounterStart, now, dps, rdps, visibleColumns);
+			DrawSummaryRow(new SummaryRowData(phase, player, dps, rdps, hps, damageTaken, activeRate, damageActiveRate, healingActiveRate), encounterStart, now, dps, rdps, visibleColumns);
 			ImGui.EndTable();
 		}
 
@@ -913,6 +919,11 @@ public sealed class MainWindow : Window, IDisposable
 			SummaryDisplayColumn.Dps => left.Dps.CompareTo(right.Dps),
 			SummaryDisplayColumn.Rdps => left.Rdps.CompareTo(right.Rdps),
 			SummaryDisplayColumn.TotalDamage => left.Player.TotalDamage.CompareTo(right.Player.TotalDamage),
+			SummaryDisplayColumn.Hps => left.Hps.CompareTo(right.Hps),
+			SummaryDisplayColumn.TotalHealing => left.Player.TotalHealing.CompareTo(right.Player.TotalHealing),
+			SummaryDisplayColumn.DamageTaken => left.DamageTaken.CompareTo(right.DamageTaken),
+			SummaryDisplayColumn.HitCount => left.Player.DamageHitCount.CompareTo(right.Player.DamageHitCount),
+			SummaryDisplayColumn.CriticalHitCount => left.Player.CriticalDamageHits.CompareTo(right.Player.CriticalDamageHits),
 			SummaryDisplayColumn.Critical => left.Player.CriticalRate.CompareTo(right.Player.CriticalRate),
 			SummaryDisplayColumn.DirectHit => left.Player.DirectHitRate.CompareTo(right.Player.DirectHitRate),
 			SummaryDisplayColumn.CriticalDirectHit => left.Player.CriticalDirectHitRate.CompareTo(right.Player.CriticalDirectHitRate),
@@ -1129,6 +1140,11 @@ public sealed class MainWindow : Window, IDisposable
 				case SummaryDisplayColumn.Dps: ProgressColumn(index, row.Dps, maximumDps, row.Dps.ToString("N1"), new Vector4(0.05f, 0.52f, 0.86f, 0.9f)); break;
 				case SummaryDisplayColumn.Rdps: ProgressColumn(index, row.Rdps, maximumRdps, row.Rdps.ToString("N1"), new Vector4(0.55f, 0.38f, 0.95f, 0.9f)); break;
 				case SummaryDisplayColumn.TotalDamage: TextColumn(index, player.TotalDamage.ToString("N0")); break;
+				case SummaryDisplayColumn.Hps: TextColumn(index, row.Hps.ToString("N1")); break;
+				case SummaryDisplayColumn.TotalHealing: TextColumn(index, player.TotalHealing.ToString("N0")); break;
+				case SummaryDisplayColumn.DamageTaken: TextColumn(index, row.DamageTaken.ToString("N0")); break;
+				case SummaryDisplayColumn.HitCount: TextColumn(index, player.DamageHitCount.ToString("N0")); break;
+				case SummaryDisplayColumn.CriticalHitCount: TextColumn(index, player.CriticalDamageHits.ToString("N0")); break;
 				case SummaryDisplayColumn.Critical: TextColumn(index, Percent(player.CriticalRate)); break;
 				case SummaryDisplayColumn.DirectHit: TextColumn(index, Percent(player.DirectHitRate)); break;
 				case SummaryDisplayColumn.CriticalDirectHit: TextColumn(index, Percent(player.CriticalDirectHitRate)); break;
@@ -1361,6 +1377,7 @@ public sealed class MainWindow : Window, IDisposable
 			CombatHistoryEndReason.Wipe => "全滅",
 			CombatHistoryEndReason.DutyCompleted => "コンテンツクリア",
 			CombatHistoryEndReason.Manual => "手動保存",
+			CombatHistoryEndReason.IinactEncounterEnded => "IINACT END",
 			_ => reason.ToString()
 		};
 	}

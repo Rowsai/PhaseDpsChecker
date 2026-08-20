@@ -24,6 +24,7 @@ var tests = new (string Name, Action Run)[]
 	("IINACT累積値をPhase差分へ変換", IinactPhaseDelta),
 	("IINACTのYOU表記をローカルプレイヤーへ対応", IinactYouAlias),
 	("IINACT CombatData JSONを解析", IinactCombatDataParsing),
+	("IINACT CombatDataの開始・END遷移を検知", IinactEncounterTransitions),
 	("mopimopi URLからWebSocket接続先を解決", IinactWebSocketEndpointResolution),
 };
 
@@ -72,6 +73,7 @@ static void HealingTargets()
     aggregator.RecordAction(new CombatActionEvent(t0, 1, "Healer", 20, "Heal", ActionKind.Magic, true, true, 2.5, effects), partyIds);
     var player = aggregator.CurrentPhase!.Players[1];
     Equal(3000L, player.TotalHealing, "party healing");
+	Near(300.0, player.Hps(10), 0.001, "HPS");
     Equal(0L, player.TotalDamage, "friendly damage excluded");
 	aggregator.EndCurrentPhase(t0.AddSeconds(10));
 	Near(0.0, player.DamageActiveRate(t0, t0.AddSeconds(10)), 0.001, "healing GCD excluded from damage active");
@@ -267,7 +269,7 @@ static void IinactCombatDataParsing()
 	JObject message = JObject.Parse("""
 	{
 	  "type": "CombatData",
-	  "Encounter": { "title": "Encounter 1" },
+	  "Encounter": { "title": "Encounter 1", "duration": "01:05", "DURATION": "65" },
 	  "Combatant": {
 	    "YOU": {
 	      "name": "YOU",
@@ -278,6 +280,8 @@ static void IinactCombatDataParsing()
 	      "crithits": "4",
 	      "DirectHitCount": "3",
 	      "CritDirectHitCount": "2"
+	      ,"encdps": "1,234.5"
+	      ,"enchps": "67.8"
 	    }
 	  },
 	  "isActive": "true"
@@ -287,6 +291,7 @@ static void IinactCombatDataParsing()
 	Equal(7L, snapshot.Sequence, "parsed sequence");
 	Equal("Encounter 1", snapshot.EncounterId, "parsed encounter title");
 	Equal(true, snapshot.IsActive, "parsed active state");
+	Near(65, snapshot.DurationSeconds, 0.001, "parsed encounter duration");
 	IinactCombatantSnapshot combatant = snapshot.Combatants["YOU"];
 	Equal(12345L, combatant.Damage, "parsed formatted damage");
 	Equal(678L, combatant.Healing, "parsed healing");
@@ -294,6 +299,20 @@ static void IinactCombatDataParsing()
 	Equal(4, combatant.CriticalHits, "parsed critical hits");
 	Equal(3, combatant.DirectHits, "parsed direct hits");
 	Equal(2, combatant.CriticalDirectHits, "parsed critical direct hits");
+	Near(1234.5, combatant.Dps, 0.001, "parsed encounter DPS");
+	Near(67.8, combatant.Hps, 0.001, "parsed encounter HPS");
+}
+
+static void IinactEncounterTransitions()
+{
+	var lifecycle = new IinactEncounterLifecycle();
+	DateTime now = DateTime.UtcNow;
+	IReadOnlyDictionary<string, IinactCombatantSnapshot> empty = new Dictionary<string, IinactCombatantSnapshot>();
+	Equal(IinactEncounterTransition.None, lifecycle.Observe(new IinactCombatSnapshot(1, now, "enc", false, empty)), "idle snapshot is not END");
+	Equal(IinactEncounterTransition.Started, lifecycle.Observe(new IinactCombatSnapshot(2, now, "enc", true, empty)), "inactive to active starts");
+	Equal(IinactEncounterTransition.None, lifecycle.Observe(new IinactCombatSnapshot(3, now, "enc", true, empty)), "active update does not restart");
+	Equal(IinactEncounterTransition.Ended, lifecycle.Observe(new IinactCombatSnapshot(4, now, "enc", false, empty)), "active to inactive is END");
+	Equal(IinactEncounterTransition.None, lifecycle.Observe(new IinactCombatSnapshot(5, now, "enc", false, empty)), "repeated inactive snapshot is ignored");
 }
 
 static void IinactWebSocketEndpointResolution()

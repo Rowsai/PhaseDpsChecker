@@ -16,6 +16,7 @@
 	<Compile Include="..\PhaseDpsChecker\Combat\HistoryFileSizeMonitor.cs" Link="Combat\HistoryFileSizeMonitor.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\IinactCombatSnapshot.cs" Link="Combat\IinactCombatSnapshot.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\IinactCombatDataParser.cs" Link="Combat\IinactCombatDataParser.cs" />
+	<Compile Include="..\PhaseDpsChecker\Combat\IinactEncounterLifecycle.cs" Link="Combat\IinactEncounterLifecycle.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\IinactWebSocketEndpoint.cs" Link="Combat\IinactWebSocketEndpoint.cs" />
     <Compile Include="..\PhaseDpsChecker\Combat\EffectSample.cs" Link="Combat\EffectSample.cs" />
 	<Compile Include="..\PhaseDpsChecker\Combat\PhaseEndDetection.cs" Link="Combat\PhaseEndDetection.cs" />

@@ -108,6 +108,16 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 			Configuration.Version = 12;
 			Configuration.Save();
 		}
+		if (Configuration.Version < 13)
+		{
+			Configuration.ShowHpsColumn = true;
+			Configuration.ShowTotalHealingColumn = true;
+			Configuration.ShowDamageTakenColumn = true;
+			Configuration.ShowHitCountColumn = true;
+			Configuration.ShowCriticalHitCountColumn = true;
+			Configuration.Version = 13;
+			Configuration.Save();
+		}
 		combatTracker = new CombatTracker(Configuration, Framework, DataManager, ObjectTable, PartyList, DutyState, Condition, ClientState, PlayerState, ChatGui, GameInteropProvider, Log);
 		partyOverlayWindow = new PartyOverlayWindow(Configuration, combatTracker);
 		mainWindow = new MainWindow(Configuration, combatTracker);

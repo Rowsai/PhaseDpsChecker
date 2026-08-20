@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace PhaseDpsChecker.Combat;
 
@@ -40,6 +41,13 @@ public sealed class PhaseRecord
 	public double DurationSeconds(DateTime now)
 	{
 		return Math.Max(0.0, (EffectiveEnd(now) - StartedAt).TotalSeconds);
+	}
+
+	public long IncomingDamageTotal(uint entityId)
+	{
+		return IinactIncomingDamageTotals.TryGetValue(entityId, out long total)
+			? total
+			: IncomingDamageEvents.Where(damage => damage.PlayerEntityId == entityId).Sum(damage => (long)damage.Amount);
 	}
 
 	internal PlayerPhaseStatistics EnsurePlayer(uint entityId, string playerName)

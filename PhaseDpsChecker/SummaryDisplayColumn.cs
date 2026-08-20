@@ -9,6 +9,11 @@ public enum SummaryDisplayColumn
 	Dps,
 	Rdps,
 	TotalDamage,
+	Hps,
+	TotalHealing,
+	DamageTaken,
+	HitCount,
+	CriticalHitCount,
 	Critical,
 	DirectHit,
 	CriticalDirectHit,
@@ -29,6 +34,11 @@ public static class SummaryDisplayColumnCatalog
 		SummaryDisplayColumn.Dps,
 		SummaryDisplayColumn.Rdps,
 		SummaryDisplayColumn.TotalDamage,
+		SummaryDisplayColumn.Hps,
+		SummaryDisplayColumn.TotalHealing,
+		SummaryDisplayColumn.DamageTaken,
+		SummaryDisplayColumn.HitCount,
+		SummaryDisplayColumn.CriticalHitCount,
 		SummaryDisplayColumn.Critical,
 		SummaryDisplayColumn.DirectHit,
 		SummaryDisplayColumn.CriticalDirectHit,
@@ -47,6 +57,11 @@ public static class SummaryDisplayColumnCatalog
 		SummaryDisplayColumn.Dps => "DPS",
 		SummaryDisplayColumn.Rdps => "rDPS",
 		SummaryDisplayColumn.TotalDamage => "総ダメージ",
+		SummaryDisplayColumn.Hps => "HPS",
+		SummaryDisplayColumn.TotalHealing => "総回復量",
+		SummaryDisplayColumn.DamageTaken => "被ダメージ",
+		SummaryDisplayColumn.HitCount => "ヒット数",
+		SummaryDisplayColumn.CriticalHitCount => "Crit数",
 		SummaryDisplayColumn.Critical => "Crit %",
 		SummaryDisplayColumn.DirectHit => "DH %",
 		SummaryDisplayColumn.CriticalDirectHit => "Crit + DH %",
@@ -58,7 +73,9 @@ public static class SummaryDisplayColumnCatalog
 	};
 
 	public static bool DefaultDescending(this SummaryDisplayColumn column) => column is
-		SummaryDisplayColumn.Dps or SummaryDisplayColumn.Rdps or SummaryDisplayColumn.TotalDamage or SummaryDisplayColumn.Critical or
+		SummaryDisplayColumn.Dps or SummaryDisplayColumn.Rdps or SummaryDisplayColumn.TotalDamage or
+		SummaryDisplayColumn.Hps or SummaryDisplayColumn.TotalHealing or SummaryDisplayColumn.DamageTaken or
+		SummaryDisplayColumn.HitCount or SummaryDisplayColumn.CriticalHitCount or SummaryDisplayColumn.Critical or
 		SummaryDisplayColumn.DirectHit or SummaryDisplayColumn.CriticalDirectHit or
 		SummaryDisplayColumn.MaximumDamage or SummaryDisplayColumn.Active or
 		SummaryDisplayColumn.DamageActive or SummaryDisplayColumn.HealingActive;

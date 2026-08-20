@@ -7,7 +7,7 @@ namespace PhaseDpsChecker;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-	public int Version { get; set; } = 12;
+	public int Version { get; set; } = 13;
 
 	public bool IsEnabled { get; set; } = true;
 
@@ -30,6 +30,11 @@ public sealed class Configuration : IPluginConfiguration
 	public bool ShowDpsColumn { get; set; } = true;
 	public bool ShowRdpsColumn { get; set; } = true;
 	public bool ShowTotalDamageColumn { get; set; } = true;
+	public bool ShowHpsColumn { get; set; } = true;
+	public bool ShowTotalHealingColumn { get; set; } = true;
+	public bool ShowDamageTakenColumn { get; set; } = true;
+	public bool ShowHitCountColumn { get; set; } = true;
+	public bool ShowCriticalHitCountColumn { get; set; } = true;
 	public bool ShowCriticalColumn { get; set; } = true;
 	public bool ShowDirectHitColumn { get; set; } = true;
 	public bool ShowCriticalDirectHitColumn { get; set; } = true;
@@ -53,6 +58,11 @@ public sealed class Configuration : IPluginConfiguration
 		SummaryDisplayColumn.Dps => ShowDpsColumn,
 		SummaryDisplayColumn.Rdps => ShowRdpsColumn,
 		SummaryDisplayColumn.TotalDamage => ShowTotalDamageColumn,
+		SummaryDisplayColumn.Hps => ShowHpsColumn,
+		SummaryDisplayColumn.TotalHealing => ShowTotalHealingColumn,
+		SummaryDisplayColumn.DamageTaken => ShowDamageTakenColumn,
+		SummaryDisplayColumn.HitCount => ShowHitCountColumn,
+		SummaryDisplayColumn.CriticalHitCount => ShowCriticalHitCountColumn,
 		SummaryDisplayColumn.Critical => ShowCriticalColumn,
 		SummaryDisplayColumn.DirectHit => ShowDirectHitColumn,
 		SummaryDisplayColumn.CriticalDirectHit => ShowCriticalDirectHitColumn,
@@ -74,6 +84,11 @@ public sealed class Configuration : IPluginConfiguration
 			case SummaryDisplayColumn.Dps: ShowDpsColumn = visible; break;
 			case SummaryDisplayColumn.Rdps: ShowRdpsColumn = visible; break;
 			case SummaryDisplayColumn.TotalDamage: ShowTotalDamageColumn = visible; break;
+			case SummaryDisplayColumn.Hps: ShowHpsColumn = visible; break;
+			case SummaryDisplayColumn.TotalHealing: ShowTotalHealingColumn = visible; break;
+			case SummaryDisplayColumn.DamageTaken: ShowDamageTakenColumn = visible; break;
+			case SummaryDisplayColumn.HitCount: ShowHitCountColumn = visible; break;
+			case SummaryDisplayColumn.CriticalHitCount: ShowCriticalHitCountColumn = visible; break;
 			case SummaryDisplayColumn.Critical: ShowCriticalColumn = visible; break;
 			case SummaryDisplayColumn.DirectHit: ShowDirectHitColumn = visible; break;
 			case SummaryDisplayColumn.CriticalDirectHit: ShowCriticalDirectHitColumn = visible; break;

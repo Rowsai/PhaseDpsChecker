@@ -216,6 +216,11 @@ public sealed class PlayerPhaseStatistics
 		return 0.0;
 	}
 
+	public double Hps(double phaseDurationSeconds)
+	{
+		return phaseDurationSeconds > 0.0 ? (double)TotalHealing / phaseDurationSeconds : 0.0;
+	}
+
 	public double Rdps(double phaseDurationSeconds)
 	{
 		return phaseDurationSeconds > 0.0 ? RaidAdjustedDamage / phaseDurationSeconds : 0.0;

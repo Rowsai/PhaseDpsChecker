@@ -3,7 +3,7 @@
   "Name": "Phase DPS Checker",
   "InternalName": "PhaseDpsChecker",
   "Punchline": "ACT互換集計をフェーズ単位で表示します。",
-  "Description": "IINACT有効時はWebSocketまたはIPCからACT互換のDPS、総ダメージ、回復量、Crit/DH率、被ダメージを取得し、フェーズ単位で表示します。IINACTが出力するログはFFLogs Uploaderへアップロードできます。IINACT未導入時はActionEffect集計へフォールバックします。アクション内訳、被弾時バフ、絶妖星乱舞専用フェーズ判定、コンテンツリプレイ、JOBアイコン付きオーバーレイ、JSON履歴に対応します。\nコマンド: /phasedps",
+  "Description": "IINACT有効時はWebSocketまたはIPCのCombatDataからDPS、総ダメージ、HPS、総回復量、被ダメージ、ヒット数、Crit数、ペット合算値を取得し、表示タブとオーバーレイへ反映します。IINACT END、全滅、コンテンツクリアで計測を終了して履歴へ保存します。IINACTが出力するログはFFLogs Uploaderへアップロードできます。IINACT未導入時はActionEffect集計へフォールバックします。\nコマンド: /phasedps",
   "ApplicableVersion": "any",
   "RepoUrl": "https://github.com/Rowsai/PhaseDpsChecker",
   "IconUrl": "https://raw.githubusercontent.com/Rowsai/PhaseDpsChecker/main/images/icon.png",
