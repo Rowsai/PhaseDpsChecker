@@ -17,10 +17,9 @@ internal sealed class IinactBridge : IDisposable
 	private readonly Func<string> getConfiguredWebSocketUrl;
 	private readonly ICallGateSubscriber<Version> getVersion;
 	private readonly ICallGateSubscriber<Version> getIpcVersion;
-	private readonly ICallGateSubscriber<string, bool> createSubscriber;
+	private readonly ICallGateSubscriber<string, bool> createLegacySubscriber;
 	private readonly ICallGateSubscriber<string, bool> unsubscribe;
 	private readonly ICallGateProvider<JObject, bool> receiver;
-	private readonly ICallGateSubscriber<JObject, bool> sender;
 	private readonly ICallGateSubscriber<bool> getServerRunning;
 	private readonly ICallGateSubscriber<Uri?> getServerUri;
 	private readonly IinactWebSocketClient webSocket;
@@ -58,10 +57,9 @@ internal sealed class IinactBridge : IDisposable
 		this.getConfiguredWebSocketUrl = getConfiguredWebSocketUrl;
 		getVersion = pluginInterface.GetIpcSubscriber<Version>("IINACT.Version");
 		getIpcVersion = pluginInterface.GetIpcSubscriber<Version>("IINACT.IpcVersion");
-		createSubscriber = pluginInterface.GetIpcSubscriber<string, bool>("IINACT.CreateSubscriber");
+		createLegacySubscriber = pluginInterface.GetIpcSubscriber<string, bool>("IINACT.CreateLegacySubscriber");
 		unsubscribe = pluginInterface.GetIpcSubscriber<string, bool>("IINACT.Unsubscribe");
 		receiver = pluginInterface.GetIpcProvider<JObject, bool>(SubscriberName);
-		sender = pluginInterface.GetIpcSubscriber<JObject, bool>($"IINACT.IpcProvider.{SubscriberName}");
 		getServerRunning = pluginInterface.GetIpcSubscriber<bool>("IINACT.Server.Listening");
 		getServerUri = pluginInterface.GetIpcSubscriber<Uri?>("IINACT.Server.Uri");
 		webSocket = new IinactWebSocketClient(message => Receive(message, "WebSocket"));
@@ -154,20 +152,12 @@ internal sealed class IinactBridge : IDisposable
 			}
 			if (!subscriberCreated)
 			{
-				subscriberCreated = createSubscriber.InvokeFunc(SubscriberName);
+				subscriberCreated = createLegacySubscriber.InvokeFunc(SubscriberName);
 				if (!subscriberCreated)
 				{
 					unsubscribe.InvokeFunc(SubscriberName);
-					subscriberCreated = createSubscriber.InvokeFunc(SubscriberName);
+					subscriberCreated = createLegacySubscriber.InvokeFunc(SubscriberName);
 				}
-			}
-			if (subscriberCreated)
-			{
-				sender.InvokeAction(JObject.FromObject(new
-				{
-					call = "subscribe",
-					events = new[] { "CombatData" },
-				}));
 			}
 		}
 		catch (Exception ex)
@@ -213,25 +203,26 @@ internal sealed class IinactBridge : IDisposable
 	{
 		try
 		{
-			if (!string.Equals(message.Value<string>("type"), "CombatData", StringComparison.Ordinal))
+			if (!IinactCombatDataParser.TryExtract(message, out JObject combatData))
 			{
 				return true;
 			}
 			DateTime receivedAt = DateTime.UtcNow;
-			IinactCombatSnapshot snapshot = IinactCombatDataParser.Parse(message, receivedAt, System.Threading.Interlocked.Increment(ref sequence));
+			IinactCombatSnapshot snapshot = IinactCombatDataParser.Parse(combatData, receivedAt, System.Threading.Interlocked.Increment(ref sequence));
 			IinactEncounterTransition transition;
+			bool acceptedSource;
 			lock (syncRoot)
 			{
-				if (!string.IsNullOrWhiteSpace(lastSource)
-					&& !string.Equals(lastSource, source, StringComparison.Ordinal)
-					&& receivedAt - lastSourceReceivedAt <= TimeSpan.FromSeconds(15))
+				transition = encounterLifecycle.Observe(source, snapshot);
+				acceptedSource = string.IsNullOrWhiteSpace(lastSource)
+					|| string.Equals(lastSource, source, StringComparison.Ordinal)
+					|| receivedAt - lastSourceReceivedAt > TimeSpan.FromSeconds(15);
+				if (acceptedSource)
 				{
-					return true;
+					latest = snapshot;
+					lastSource = source;
+					lastSourceReceivedAt = receivedAt;
 				}
-				transition = encounterLifecycle.Observe(snapshot);
-				latest = snapshot;
-				lastSource = source;
-				lastSourceReceivedAt = receivedAt;
 			}
 			if (transition == IinactEncounterTransition.Started)
 			{
@@ -241,7 +232,11 @@ internal sealed class IinactBridge : IDisposable
 			{
 				encounterEnds.Enqueue(snapshot);
 			}
-			Status = $"IINACT {Version} / {source} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
+			if (!acceptedSource)
+			{
+				return true;
+			}
+			Status = $"IINACT {Version} / {source} / {(snapshot.IsActive ? "計測中" : "END")} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
 		}
 		catch (Exception ex)
 		{
@@ -271,7 +266,7 @@ internal sealed class IinactBridge : IDisposable
 		}
 		if (snapshot != null)
 		{
-			Status = $"IINACT {Version} / {source} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
+			Status = $"IINACT {Version} / {source} / {(snapshot.IsActive ? "計測中" : "END")} / 最終集計 {snapshot.ReceivedAt.ToLocalTime():HH:mm:ss} / {snapshot.Combatants.Count}人";
 			return;
 		}
 		if (webSocket.IsConnected)

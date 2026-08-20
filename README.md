@@ -14,7 +14,7 @@ https://raw.githubusercontent.com/Rowsai/Rowsai-Plugins/main/pluginmaster.json
 
 ### IINACT連携（任意・推奨）
 
-ACT互換集計とFFLogs用ログの生成を利用する場合は、[IINACT](https://github.com/marzent/IINACT) を別途導入して有効にしてください。Phase DPS CheckerはIINACTのOverlayPlugin WebSocket接続先をIPCから自動検出し、`CombatData`の累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。CombatDataの開始通知から通常計測を開始し、`isActive`が`true`から`false`へ変わった通知をIINACT ENDとして扱います。WebSocketを利用できない場合はIINACTの直接IPCをフォールバックとして使用します。
+ACT互換集計とFFLogs用ログの生成を利用する場合は、[IINACT](https://github.com/marzent/IINACT) を別途導入して有効にしてください。Phase DPS CheckerはIINACTのOverlayPlugin WebSocket接続先をIPCから自動検出し、`CombatData`の累積戦闘データを各Phaseの開始・終了時点の差分へ変換します。CombatDataの開始通知から通常計測を開始し、`isActive`が`true`から`false`へ変わった通知をIINACT ENDとして扱います。終了済みの古いCombatDataは新しいPhaseへ適用しません。WebSocketを利用できない場合は、CombatDataを自動購読するIINACT Legacy IPCをフォールバックとして使用します。
 
 自動検出できない場合は、設定タブへ `ws://127.0.0.1:10500` のようなWebSocket URL、または次のような `HOST_PORT` 付きmopimopi URLを指定できます。mopimopiの画面を読み取るのではなく、URL内の接続先からIINACTの`CombatData`を直接購読します。
 
@@ -35,6 +35,7 @@ IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作
 - IINACT内のFFXIV_ACT_PluginによるACT互換集計をDPS、総ダメージ、HPS、総回復量、被ダメージ、ヒット数、Crit数、Crit/DH率へ反映
 - IINACTが生成するFFLogs Uploader互換ネットワークログを利用可能
 - パーティメンバーとペット（オーナーへ合算）の敵向けダメージをPhaseごとの差分として集計
+- IINACTとActionEffect内訳の差（DoTシミュレーション、ペット等）は `IINACT未帰属（DoT・ペット等）` 行へ反映し、概要の総ダメージ／総回復量と全アクション合計を常に一致
 - DoT / HoT の周期効果を取得
 - 着弾ダメージとDoT / HoTのtickを分離し、周期効果をステータス名の独立行として「その他 / オートアタック」へ集計
 - リミットブレイクのダメージを発動者から分離し、仮想メンバー `LIMIT BREAK` として集計
@@ -51,6 +52,7 @@ IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作
 - 個人表示: ウェポンスキル、アビリティ、魔法、回復魔法、回復アビリティ、その他の使用回数・詠唱失敗数・ダメージ・回復量
 - `プレイヤーは「アクション」の詠唱を中断した。` 形式のバトルログから、パーティ／リプレイメンバーの魔法詠唱失敗数を集計
 - IINACT END、全滅、またはコンテンツクリア時に計測を終了して現在表示をクリアし、全フェーズを戦闘履歴へ自動保存
+- v0.11.2以前の履歴で古い終了済みCombatDataが混入した場合は、保存済みのアクション実測値へ自動修復
 - 履歴表示タブは履歴番号の昇順で表示し、Phase全体／Phase個別、パーティ全体／メンバー個人／履歴全体のTotal DPSを選択
 - 履歴削除ポップアップで複数の戦闘履歴を選択して一括削除
 - 全体表は Phase 昇順・DPS 降順を初期値として、各ヘッダのクリックで並び替え
@@ -94,7 +96,7 @@ IINACTが未導入または未接続の場合もPhase DPS Checker単体で動作
 
 IINACTとの連携は公開WebSocketとIPCのみを使用しているため、IINACTのコードやGPLv3ライセンス対象コードは本リポジトリへ同梱していません。IINACT側のログ出力を無効にした場合はFFLogs用ログが生成されません。
 
-アクション内訳、Active%、Phase境界、被弾時のバフ／デバフ詳細はDalamudのライブイベントから取得します。概要のDPS・総ダメージ・回復量・Crit/DH率と被ダメージ合計はIINACT集計を優先するため、FFXIV_ACT_Pluginのペット合算やDoTシミュレーションによって内訳の単純合計と差が出ることがあります。
+アクション内訳、Active%、Phase境界、被弾時のバフ／デバフ詳細はDalamudのライブイベントから取得します。概要のDPS・総ダメージ・回復量・Crit/DH率と被ダメージ合計はIINACT集計を優先します。FFXIV_ACT_Pluginのペット合算やDoTシミュレーションによる差は `IINACT未帰属（DoT・ペット等）` として内訳へ明示します。
 
 他メンバーの実スキルスピードは取得できないため、Active%はActionシートの基本リキャスト値を使う近似値です。
 

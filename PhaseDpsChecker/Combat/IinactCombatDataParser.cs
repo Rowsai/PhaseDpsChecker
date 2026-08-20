@@ -8,6 +8,24 @@ namespace PhaseDpsChecker.Combat;
 
 internal static class IinactCombatDataParser
 {
+	public static bool TryExtract(JObject message, out JObject combatData)
+	{
+		if (string.Equals(message.Value<string>("type"), "CombatData", StringComparison.Ordinal))
+		{
+			combatData = message;
+			return true;
+		}
+		if (string.Equals(message.Value<string>("type"), "broadcast", StringComparison.Ordinal)
+			&& string.Equals(message.Value<string>("msgtype"), "CombatData", StringComparison.Ordinal)
+			&& message["msg"] is JObject legacyCombatData)
+		{
+			combatData = legacyCombatData;
+			return true;
+		}
+		combatData = null!;
+		return false;
+	}
+
 	public static IinactCombatSnapshot Parse(JObject message, DateTime receivedAt, long sequence)
 	{
 		JObject encounter = message["Encounter"] as JObject ?? new JObject();

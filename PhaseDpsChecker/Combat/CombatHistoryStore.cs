@@ -56,12 +56,13 @@ internal sealed class CombatHistoryStore
 			}
 
 			HistoryFileDto? file = JsonSerializer.Deserialize<HistoryFileDto>(File.ReadAllText(FilePath), jsonOptions);
-			if (file == null || file.SchemaVersion != 1)
+			if (file == null || file.SchemaVersion is not 1 and not 2)
 			{
 				throw new InvalidDataException("未対応の履歴ファイル形式です。");
 			}
 			LastError = null;
-			return file.Histories.Select(RestoreHistory).OrderBy(history => history.Number).ToArray();
+			bool trustStoredIinactTotals = file.SchemaVersion >= 2;
+			return file.Histories.Select(history => RestoreHistory(history, trustStoredIinactTotals)).OrderBy(history => history.Number).ToArray();
 		}
 		catch (Exception ex)
 		{
@@ -94,7 +95,7 @@ internal sealed class CombatHistoryStore
 		}
 	}
 
-	private static CombatHistoryRecord RestoreHistory(HistoryDto history)
+	private static CombatHistoryRecord RestoreHistory(HistoryDto history, bool trustStoredIinactTotals)
 	{
 		List<PhaseRecord> phases = new();
 		foreach (PhaseDto savedPhase in history.Phases.OrderBy(phase => phase.Number))
@@ -142,6 +143,7 @@ internal sealed class CombatHistoryStore
 						savedAction.MinimumAmount);
 					player.Actions[action.ActionId] = action;
 				}
+				player.ReconcileRestoredActions(trustStoredIinactTotals);
 			}
 			foreach (IncomingDamageDto incoming in savedPhase.IncomingDamageEvents)
 			{
@@ -159,7 +161,10 @@ internal sealed class CombatHistoryStore
 			}
 			foreach (KeyValuePair<uint, long> incomingTotal in savedPhase.IinactIncomingDamageTotals)
 			{
-				phase.SetIinactIncomingDamage(incomingTotal.Key, incomingTotal.Value);
+				if (trustStoredIinactTotals)
+				{
+					phase.SetIinactIncomingDamage(incomingTotal.Key, incomingTotal.Value);
+				}
 			}
 			phase.MarkIinactSynchronized(savedPhase.IinactSequence, savedPhase.HasIinactData);
 			phases.Add(phase);
@@ -169,7 +174,7 @@ internal sealed class CombatHistoryStore
 
 	private sealed class HistoryFileDto
 	{
-		public int SchemaVersion { get; set; } = 1;
+		public int SchemaVersion { get; set; } = 2;
 		public List<HistoryDto> Histories { get; set; } = new();
 	}
 

@@ -331,7 +331,7 @@ public sealed class CombatTracker : IDisposable
 		Dictionary<uint, string> currentMembers = Roster.GetCurrentMembers();
 		HashSet<uint> memberIds = currentMembers.Keys.ToHashSet();
 		DateTime now = DateTime.UtcNow;
-		TryBeginNormalPhaseFromIinact(currentMembers);
+		HandleIinactEncounterStart(currentMembers);
 		if (ActivePreset == PhaseDetectionPreset.FuturesRewrittenUltimate && condition[ConditionFlag.InCombat])
 		{
 			ApplyDedicatedTransition(futuresRewrittenController.OnCombatStarted(), now, currentMembers);
@@ -355,7 +355,7 @@ public sealed class CombatTracker : IDisposable
 		iinactBridge.TryTakeEncounterEnd(out IinactCombatSnapshot? endedEncounter);
 		if (endedEncounter != null && Aggregator.CurrentPhase is PhaseRecord endedPhase)
 		{
-			SyncPhaseFromIinact(endedPhase, endedEncounter);
+			SyncPhaseFromIinact(endedPhase, endedEncounter, allowInactiveFinal: true);
 		}
 		if (dutyCompletionPending)
 		{
@@ -792,10 +792,6 @@ public sealed class CombatTracker : IDisposable
 		if (baseline == null)
 		{
 			iinactBridge.TryGetLatest(out baseline);
-			if (baseline is { IsActive: false })
-			{
-				baseline = IinactCombatSnapshot.Empty(timestamp);
-			}
 		}
 		iinactSynchronizer.Begin(phase, baseline);
 		anchorWasTargetable = anchorEntityId != 0 && objectTable.SearchByEntityId(anchorEntityId)?.IsTargetable == true;
@@ -1079,7 +1075,7 @@ public sealed class CombatTracker : IDisposable
 	{
 		if (finalSnapshot != null && Aggregator.CurrentPhase is PhaseRecord phase)
 		{
-			SyncPhaseFromIinact(phase, finalSnapshot);
+			SyncPhaseFromIinact(phase, finalSnapshot, allowInactiveFinal: true);
 		}
 		else
 		{
@@ -1135,13 +1131,19 @@ public sealed class CombatTracker : IDisposable
 		}
 	}
 
-	private void TryBeginNormalPhaseFromIinact(IReadOnlyDictionary<uint, string> members)
+	private void HandleIinactEncounterStart(IReadOnlyDictionary<uint, string> members)
 	{
 		if (members.Count == 0 || !iinactBridge.TryTakeEncounterStart(out IinactCombatSnapshot? snapshot) || snapshot == null)
 		{
 			return;
 		}
-		if (ActivePreset != PhaseDetectionPreset.Normal || Aggregator.CurrentPhase != null)
+		if (Aggregator.CurrentPhase is PhaseRecord currentPhase)
+		{
+			iinactSynchronizer.Begin(currentPhase, IinactCombatSnapshot.Empty(currentPhase.StartedAt));
+			SyncPhaseFromIinact(currentPhase, snapshot);
+			return;
+		}
+		if (ActivePreset != PhaseDetectionPreset.Normal)
 		{
 			return;
 		}
@@ -1168,11 +1170,11 @@ public sealed class CombatTracker : IDisposable
 		}
 	}
 
-	private void SyncPhaseFromIinact(PhaseRecord phase, IinactCombatSnapshot snapshot)
+	private void SyncPhaseFromIinact(PhaseRecord phase, IinactCombatSnapshot snapshot, bool allowInactiveFinal = false)
 	{
 		if (snapshot.Sequence > phase.IinactSequence)
 		{
-			iinactSynchronizer.Apply(phase, snapshot, playerState.IsLoaded ? playerState.EntityId : 0u);
+			iinactSynchronizer.Apply(phase, snapshot, playerState.IsLoaded ? playerState.EntityId : 0u, allowInactiveFinal);
 		}
 	}
 }

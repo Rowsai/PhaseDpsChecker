@@ -18,13 +18,19 @@ var tests = new (string Name, Action Run)[]
 	("追加リキャストグループの GCD 判定", AdditionalCooldownGroupGcd),
 	("被ダメージ時ステータスを防御系に限定", DefensiveStatusesOnly),
 	("履歴JSONの保存と復元", HistoryPersistenceRoundTrip),
+	("v0.11.2以前の不正なIINACT履歴をアクション実測へ修復", LegacyHistoryMismatchMigration),
 	("詠唱中断ログの解析と集計", InterruptedCastCounting),
 	("履歴を個別に削除", DeleteIndividualHistory),
 	("履歴ファイル容量の境界判定", HistoryFileSizeThresholds),
 	("IINACT累積値をPhase差分へ変換", IinactPhaseDelta),
+	("inactiveの古いIINACT集計を新Phaseへ適用しない", IinactInactiveSnapshotIgnored),
+	("Encounter title変更後もIINACT差分を維持", IinactTitleChangeKeepsBaseline),
+	("IINACT集計とアクション内訳を完全一致", IinactActionReconciliation),
 	("IINACTのYOU表記をローカルプレイヤーへ対応", IinactYouAlias),
 	("IINACT CombatData JSONを解析", IinactCombatDataParsing),
+	("IINACT Legacy IPCのCombatDataを展開", IinactLegacyCombatDataExtraction),
 	("IINACT CombatDataの開始・END遷移を検知", IinactEncounterTransitions),
+	("IPCとWebSocketのどちらのENDも検知", IinactMultiSourceEndTransition),
 	("mopimopi URLからWebSocket接続先を解決", IinactWebSocketEndpointResolution),
 };
 
@@ -55,6 +61,7 @@ static void DamageRatesAndDps()
     Near(0.5, player.CriticalDirectHitRate, 0.001, "critical direct-hit rate");
     Equal(1000u, player.MaximumDamage, "maximum damage");
     Equal(2, player.Actions[10].UseCount, "use count");
+	AssertActionTotalsMatch(player, "ActionEffect fallback exact totals");
 }
 
 static void HealingTargets()
@@ -78,6 +85,7 @@ static void HealingTargets()
 	aggregator.EndCurrentPhase(t0.AddSeconds(10));
 	Near(0.0, player.DamageActiveRate(t0, t0.AddSeconds(10)), 0.001, "healing GCD excluded from damage active");
 	Near(0.25, player.HealingActiveRate(t0, t0.AddSeconds(10)), 0.001, "healing GCD included in healing active");
+	AssertActionTotalsMatch(player, "healing exact totals");
 }
 
 static void GcdActiveRate()
@@ -153,6 +161,7 @@ static void HistoryPersistenceRoundTrip()
 		Equal(1000u, loaded.Single().Phases.Single().IncomingDamageEvents.Single().Amount, "incoming damage restored");
 		Equal(1234L, loaded.Single().Phases.Single().IinactIncomingDamageTotals[1], "IINACT incoming total restored");
 		Equal(true, loaded.Single().Phases.Single().HasIinactData, "IINACT source marker restored");
+		AssertActionTotalsMatch(player, "persisted history exact totals");
 	}
 	finally
 	{
@@ -211,6 +220,49 @@ static void HistoryFileSizeThresholds()
 	Equal(HistoryFileSizeLevel.Danger, HistoryFileSizeMonitor.GetLevel(HistoryFileSizeMonitor.DangerThresholdBytes + 1), "over 1 GB danger");
 }
 
+static void LegacyHistoryMismatchMigration()
+{
+	string directory = Path.Combine(Path.GetTempPath(), $"PhaseDpsCheckerLegacyTests-{Guid.NewGuid():N}");
+	try
+	{
+		DateTime t0 = DateTime.UtcNow;
+		var party = new Dictionary<uint, string> { [1] = "Rowsai Elakha" };
+		var partyIds = party.Keys.ToHashSet();
+		var aggregator = new CombatAggregator();
+		PhaseRecord phase = aggregator.BeginPhase(t0, party, 900);
+		aggregator.RecordAction(new CombatActionEvent(t0, 1, "Rowsai Elakha", 10, "ファストブレード", ActionKind.WeaponSkill, true, true, 2.5,
+			[new EffectSample(900, 14_093, 0, false, false)]), partyIds);
+		aggregator.RecordAction(new CombatActionEvent(t0.AddSeconds(1), 1, "Rowsai Elakha", 11, "攻撃", ActionKind.Other, true, false, 0,
+			[new EffectSample(900, 33_067, 0, false, false)]), partyIds);
+		aggregator.RecordIncomingDamage(new IncomingDamageEvent(t0.AddSeconds(2), 1, "Rowsai Elakha", 900, "Enemy", 20, "攻撃", 1_234, []), partyIds);
+		phase.Players[1].ApplyIinactTotals(7_903_291, 1_364_842, 200, 29, null, null);
+		phase.SetIinactIncomingDamage(1, 1_361_355);
+		aggregator.ArchiveCurrent(t0.AddSeconds(15.627), CombatHistoryEndReason.Manual);
+
+		var store = new CombatHistoryStore(() => directory, directory, (_, _) => { });
+		Equal(true, store.Save(aggregator.Histories), "legacy fixture saved");
+		JObject root = JObject.Parse(File.ReadAllText(store.FilePath));
+		root["SchemaVersion"] = 1;
+		var actions = (Newtonsoft.Json.Linq.JArray)root["Histories"]![0]!["Phases"]![0]!["Players"]![0]!["Actions"]!;
+		actions.First(action => action.Value<uint>("ActionId") == PlayerPhaseStatistics.IinactReconciliationActionId).Remove();
+		File.WriteAllText(store.FilePath, root.ToString());
+
+		PhaseRecord restoredPhase = store.Load().Single().Phases.Single();
+		PlayerPhaseStatistics restored = restoredPhase.Players[1];
+		Equal(47_160L, restored.TotalDamage, "legacy stale IINACT damage replaced by action total");
+		Equal(0L, restored.TotalHealing, "legacy stale IINACT healing replaced by action total");
+		Equal(1_234L, restoredPhase.IncomingDamageTotal(1), "legacy stale IINACT incoming damage replaced by event total");
+		AssertActionTotalsMatch(restored, "legacy history migration exact totals");
+	}
+	finally
+	{
+		if (Directory.Exists(directory))
+		{
+			Directory.Delete(directory, true);
+		}
+	}
+}
+
 static void IinactPhaseDelta()
 {
 	var t0 = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
@@ -239,8 +291,79 @@ static void IinactPhaseDelta()
 	Equal(400L, phase.IinactIncomingDamageTotals[1], "incoming damage delta");
 	Equal(500L, phase.Players[2].TotalDamage, "second player damage");
 	Equal(true, phase.HasIinactData, "phase marked as IINACT data");
+	AssertActionTotalsMatch(phase.Players[1], "phase delta exact totals");
 	aggregator.RecordAction(Event(t0.AddSeconds(11), 1, 10, "Later local event", new EffectSample(900, 999, 0, false, false)), party.Keys.ToHashSet());
 	Equal(1100L, phase.Players[1].TotalDamage, "IINACT total remains authoritative between snapshots");
+	AssertActionTotalsMatch(phase.Players[1], "phase delta remains exact after local event");
+}
+
+static void IinactInactiveSnapshotIgnored()
+{
+	DateTime t0 = DateTime.UtcNow;
+	var aggregator = new CombatAggregator();
+	var party = new Dictionary<uint, string> { [1] = "Player One" };
+	PhaseRecord phase = aggregator.BeginPhase(t0, party, 900);
+	aggregator.RecordAction(Event(t0, 1, 10, "Fast Blade", new EffectSample(900, 14_093, 0, false, false)), party.Keys.ToHashSet());
+	aggregator.RecordAction(Event(t0.AddSeconds(1), 1, 11, "Attack", new EffectSample(900, 33_067, 0, false, false)), party.Keys.ToHashSet());
+	var synchronizer = new IinactPhaseSynchronizer();
+	synchronizer.Begin(phase, IinactCombatSnapshot.Empty(t0));
+	var stale = new IinactCombatSnapshot(10, t0, "old encounter", false, new Dictionary<string, IinactCombatantSnapshot>
+	{
+		["Player 1"] = new("Player 1", 7_903_291, 1_364_842, 1_361_355, 200, 29, null, null),
+	});
+	Equal(false, synchronizer.Apply(phase, stale), "inactive stale snapshot rejected");
+	Equal(47_160L, phase.Players[1].TotalDamage, "screenshot action damage remains authoritative against stale snapshot");
+	Equal(0L, phase.Players[1].TotalHealing, "stale healing not applied");
+	AssertActionTotalsMatch(phase.Players[1], "inactive snapshot exact totals");
+}
+
+static void IinactTitleChangeKeepsBaseline()
+{
+	DateTime t0 = DateTime.UtcNow;
+	var aggregator = new CombatAggregator();
+	PhaseRecord phase = aggregator.BeginPhase(t0, new Dictionary<uint, string> { [1] = "Player One" }, 900);
+	var synchronizer = new IinactPhaseSynchronizer();
+	synchronizer.Begin(phase, new IinactCombatSnapshot(1, t0, "Training Dummy A", true, new Dictionary<string, IinactCombatantSnapshot>
+	{
+		["Player One"] = new("Player One", 10_000, 2_000, 1_000, 10, 2, null, null),
+	}));
+	var changedTitle = new IinactCombatSnapshot(2, t0.AddSeconds(10), "Training Dummy B", true, new Dictionary<string, IinactCombatantSnapshot>
+	{
+		["Player One"] = new("Player One", 13_500, 2_750, 1_600, 14, 3, null, null),
+	});
+	Equal(true, synchronizer.Apply(phase, changedTitle), "active snapshot applied after title change");
+	Equal(3_500L, phase.Players[1].TotalDamage, "title change keeps damage baseline");
+	Equal(750L, phase.Players[1].TotalHealing, "title change keeps healing baseline");
+	Equal(600L, phase.IinactIncomingDamageTotals[1], "title change keeps incoming baseline");
+	AssertActionTotalsMatch(phase.Players[1], "title change exact totals");
+}
+
+static void IinactActionReconciliation()
+{
+	DateTime t0 = DateTime.UtcNow;
+	var party = new Dictionary<uint, string> { [1] = "Player One", [2] = "Player Two" };
+	var partyIds = party.Keys.ToHashSet();
+	var aggregator = new CombatAggregator();
+	PhaseRecord phase = aggregator.BeginPhase(t0, party, 900);
+	aggregator.RecordAction(new CombatActionEvent(t0, 1, "Player One", 10, "Local Action", ActionKind.WeaponSkill, true, true, 2.5,
+		[new EffectSample(900, 900, 0, false, false), new EffectSample(2, 0, 300, false, false)]), partyIds);
+	var synchronizer = new IinactPhaseSynchronizer();
+	synchronizer.Begin(phase, IinactCombatSnapshot.Empty(t0));
+	var snapshot = new IinactCombatSnapshot(1, t0.AddSeconds(1), "enc", true, new Dictionary<string, IinactCombatantSnapshot>
+	{
+		["Player One"] = new("Player One", 1_000, 500, 0, 2, 1, null, null),
+	});
+	Equal(true, synchronizer.Apply(phase, snapshot), "IINACT totals applied");
+	PlayerPhaseStatistics player = phase.Players[1];
+	Equal(1_000L, player.TotalDamage, "reconciled damage");
+	Equal(500L, player.TotalHealing, "reconciled healing");
+	Equal(100L, player.Actions[PlayerPhaseStatistics.IinactReconciliationActionId].TotalDamage, "unattributed damage row");
+	Equal(200L, player.Actions[PlayerPhaseStatistics.IinactReconciliationActionId].TotalHealing, "unattributed healing row");
+	AssertActionTotalsMatch(player, "IINACT reconciliation exact totals");
+
+	aggregator.RecordAction(Event(t0.AddSeconds(2), 1, 11, "Later Local Action", new EffectSample(900, 200, 0, false, false)), partyIds);
+	Equal(1_100L, player.TotalDamage, "newer local detail is not discarded while waiting for IINACT");
+	AssertActionTotalsMatch(player, "post-local action exact totals");
 }
 
 static void IinactYouAlias()
@@ -262,6 +385,8 @@ static void IinactYouAlias()
 	Equal(300L, phase.Players[1].TotalHealing, "YOU healing mapped to local player");
 	Equal(200L, phase.IinactIncomingDamageTotals[1], "YOU incoming damage mapped to local player");
 	Equal(500L, phase.Players[2].TotalDamage, "named party member remains mapped by name");
+	AssertActionTotalsMatch(phase.Players[1], "YOU alias exact totals");
+	AssertActionTotalsMatch(phase.Players[2], "named member exact totals");
 }
 
 static void IinactCombatDataParsing()
@@ -303,6 +428,21 @@ static void IinactCombatDataParsing()
 	Near(67.8, combatant.Hps, 0.001, "parsed encounter HPS");
 }
 
+static void IinactLegacyCombatDataExtraction()
+{
+	JObject direct = JObject.Parse("""{ "type": "CombatData", "Combatant": {}, "isActive": "false" }""");
+	JObject legacy = new()
+	{
+		["type"] = "broadcast",
+		["msgtype"] = "CombatData",
+		["msg"] = direct,
+	};
+	Equal(true, IinactCombatDataParser.TryExtract(legacy, out JObject extracted), "legacy CombatData extracted");
+	Equal("CombatData", extracted.Value<string>("type"), "legacy payload type");
+	Equal(true, IinactCombatDataParser.TryExtract(direct, out JObject extractedDirect), "direct CombatData accepted");
+	Equal(direct, extractedDirect, "direct payload preserved");
+}
+
 static void IinactEncounterTransitions()
 {
 	var lifecycle = new IinactEncounterLifecycle();
@@ -313,6 +453,18 @@ static void IinactEncounterTransitions()
 	Equal(IinactEncounterTransition.None, lifecycle.Observe(new IinactCombatSnapshot(3, now, "enc", true, empty)), "active update does not restart");
 	Equal(IinactEncounterTransition.Ended, lifecycle.Observe(new IinactCombatSnapshot(4, now, "enc", false, empty)), "active to inactive is END");
 	Equal(IinactEncounterTransition.None, lifecycle.Observe(new IinactCombatSnapshot(5, now, "enc", false, empty)), "repeated inactive snapshot is ignored");
+}
+
+static void IinactMultiSourceEndTransition()
+{
+	var lifecycle = new IinactEncounterLifecycle();
+	DateTime now = DateTime.UtcNow;
+	IReadOnlyDictionary<string, IinactCombatantSnapshot> empty = new Dictionary<string, IinactCombatantSnapshot>();
+	Equal(IinactEncounterTransition.Started, lifecycle.Observe("IPC", new IinactCombatSnapshot(1, now, "enc", true, empty)), "IPC starts encounter");
+	Equal(IinactEncounterTransition.None, lifecycle.Observe("WebSocket", new IinactCombatSnapshot(2, now, "enc", true, empty)), "duplicate source start ignored");
+	Equal(IinactEncounterTransition.Ended, lifecycle.Observe("WebSocket", new IinactCombatSnapshot(3, now, "enc", false, empty)), "secondary source END accepted immediately");
+	Equal(IinactEncounterTransition.None, lifecycle.Observe("IPC", new IinactCombatSnapshot(4, now, "enc", false, empty)), "duplicate IPC END ignored");
+	Equal(IinactEncounterTransition.Started, lifecycle.Observe("IPC", new IinactCombatSnapshot(5, now, "next", true, empty)), "next IPC encounter starts");
 }
 
 static void IinactWebSocketEndpointResolution()
@@ -493,6 +645,12 @@ static void ReplayPartyMemberResolution()
 
 static CombatActionEvent Event(DateTime timestamp, uint source, uint actionId, string actionName, EffectSample effect, bool gcd = false, double gcdSeconds = 2.5) =>
     new(timestamp, source, $"Player {source}", actionId, actionName, ActionKind.WeaponSkill, true, gcd, gcdSeconds, [effect]);
+
+static void AssertActionTotalsMatch(PlayerPhaseStatistics player, string label)
+{
+	Equal(player.TotalDamage, player.ActionDamageTotal, $"{label} damage");
+	Equal(player.TotalHealing, player.ActionHealingTotal, $"{label} healing");
+}
 
 static void Equal<T>(T expected, T actual, string label)
 {

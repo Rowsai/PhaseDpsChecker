@@ -112,6 +112,25 @@ public sealed class ActionStatistics
 		MinimumAmount = minimumAmount;
 	}
 
+	internal void SetIinactReconciliation(
+		long totalDamage,
+		long totalHealing,
+		int effectCount,
+		int criticalEffects,
+		int directHitEffects,
+		int criticalDirectHitEffects)
+	{
+		TotalDamage = Math.Max(0, totalDamage);
+		TotalHealing = Math.Max(0, totalHealing);
+		IsHealingAction = TotalHealing > 0;
+		EffectCount = Math.Max(0, effectCount);
+		CriticalEffects = Math.Clamp(criticalEffects, 0, EffectCount);
+		DirectHitEffects = Math.Clamp(directHitEffects, 0, EffectCount);
+		CriticalDirectHitEffects = Math.Clamp(criticalDirectHitEffects, 0, EffectCount);
+		MaximumAmount = 0;
+		MinimumAmount = uint.MaxValue;
+	}
+
 	private void AddEffect(uint amount, bool critical, bool directHit)
 	{
 		EffectCount++;

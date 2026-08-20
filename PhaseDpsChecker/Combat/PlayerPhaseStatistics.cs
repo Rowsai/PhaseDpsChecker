@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace PhaseDpsChecker.Combat;
 
 public sealed class PlayerPhaseStatistics
 {
+	internal const uint IinactReconciliationActionId = 0xFFFFFFF0u;
+	internal const string IinactReconciliationActionName = "IINACT未帰属（DoT・ペット等）";
 	private readonly List<(DateTime Start, DateTime End)> gcdIntervals = new List<(DateTime, DateTime)>();
 	private readonly List<(DateTime Start, DateTime End)> damageGcdIntervals = new List<(DateTime, DateTime)>();
 	private readonly List<(DateTime Start, DateTime End)> healingGcdIntervals = new List<(DateTime, DateTime)>();
@@ -27,9 +30,13 @@ public sealed class PlayerPhaseStatistics
 
 	public string PlayerName { get; private set; }
 
-	public long TotalDamage => iinactTotalDamage ?? capturedTotalDamage;
+	public long TotalDamage => Math.Max(capturedTotalDamage, iinactTotalDamage ?? 0);
 
-	public long TotalHealing => iinactTotalHealing ?? capturedTotalHealing;
+	public long TotalHealing => Math.Max(capturedTotalHealing, iinactTotalHealing ?? 0);
+
+	public long ActionDamageTotal => Actions.Values.Sum(action => action.TotalDamage);
+
+	public long ActionHealingTotal => Actions.Values.Sum(action => action.TotalHealing);
 
 	public double ExternalBuffDamageReceived { get; private set; }
 
@@ -41,13 +48,13 @@ public sealed class PlayerPhaseStatistics
 
 	public int UnbuffedDirectHits { get; private set; }
 
-	public int DamageHitCount => iinactDamageHitCount ?? capturedDamageHitCount;
+	public int DamageHitCount => Math.Max(capturedDamageHitCount, iinactDamageHitCount ?? 0);
 
-	public int CriticalDamageHits => iinactCriticalDamageHits ?? capturedCriticalDamageHits;
+	public int CriticalDamageHits => Math.Clamp(Math.Max(capturedCriticalDamageHits, iinactCriticalDamageHits ?? 0), 0, DamageHitCount);
 
-	public int DirectDamageHits => iinactDirectDamageHits ?? capturedDirectDamageHits;
+	public int DirectDamageHits => Math.Clamp(Math.Max(capturedDirectDamageHits, iinactDirectDamageHits ?? 0), 0, DamageHitCount);
 
-	public int CriticalDirectDamageHits => iinactCriticalDirectDamageHits ?? capturedCriticalDirectDamageHits;
+	public int CriticalDirectDamageHits => Math.Clamp(Math.Max(capturedCriticalDirectDamageHits, iinactCriticalDirectDamageHits ?? 0), 0, DamageHitCount);
 
 	public uint MaximumDamage { get; private set; }
 
@@ -140,12 +147,14 @@ public sealed class PlayerPhaseStatistics
 			MaximumDamageAction = actionName;
 		}
 		action.AddDamage(effect);
+		UpdateIinactReconciliation();
 	}
 
 	internal void AddHealing(ActionStatistics action, EffectSample effect)
 	{
 		capturedTotalHealing += effect.Healing;
 		action.AddHealing(effect);
+		UpdateIinactReconciliation();
 	}
 
 	internal void AddRaidAdjustment(double externalBuffDamageReceived, double raidBuffDamageGranted)
@@ -166,14 +175,38 @@ public sealed class PlayerPhaseStatistics
 		iinactTotalHealing = Math.Max(0, totalHealing);
 		iinactDamageHitCount = Math.Max(0, damageHitCount);
 		iinactCriticalDamageHits = Math.Clamp(criticalDamageHits, 0, iinactDamageHitCount.Value);
-		if (directDamageHits.HasValue)
-		{
-			iinactDirectDamageHits = Math.Clamp(directDamageHits.Value, 0, iinactDamageHitCount.Value);
-		}
-		if (criticalDirectDamageHits.HasValue)
-		{
-			iinactCriticalDirectDamageHits = Math.Clamp(criticalDirectDamageHits.Value, 0, iinactDamageHitCount.Value);
-		}
+		iinactDirectDamageHits = directDamageHits.HasValue
+			? Math.Clamp(directDamageHits.Value, 0, iinactDamageHitCount.Value)
+			: null;
+		iinactCriticalDirectDamageHits = criticalDirectDamageHits.HasValue
+			? Math.Clamp(criticalDirectDamageHits.Value, 0, iinactDamageHitCount.Value)
+			: null;
+		UpdateIinactReconciliation();
+	}
+
+	internal void ReconcileRestoredActions(bool trustStoredIinactTotals)
+	{
+		long restoredDamage = capturedTotalDamage;
+		long restoredHealing = capturedTotalHealing;
+		int restoredHits = capturedDamageHitCount;
+		int restoredCriticalHits = capturedCriticalDamageHits;
+		int restoredDirectHits = capturedDirectDamageHits;
+		int restoredCriticalDirectHits = capturedCriticalDirectDamageHits;
+		Actions.Remove(IinactReconciliationActionId);
+		bool hasCapturedActions = Actions.Count > 0;
+		capturedTotalDamage = Actions.Values.Sum(action => action.TotalDamage);
+		capturedTotalHealing = Actions.Values.Sum(action => action.TotalHealing);
+		capturedDamageHitCount = Actions.Values.Where(action => action.TotalDamage > 0).Sum(action => action.EffectCount);
+		capturedCriticalDamageHits = Actions.Values.Where(action => action.TotalDamage > 0).Sum(action => action.CriticalEffects);
+		capturedDirectDamageHits = Actions.Values.Where(action => action.TotalDamage > 0).Sum(action => action.DirectHitEffects);
+		capturedCriticalDirectDamageHits = Actions.Values.Where(action => action.TotalDamage > 0).Sum(action => action.CriticalDirectHitEffects);
+		iinactTotalDamage = trustStoredIinactTotals || !hasCapturedActions ? Math.Max(restoredDamage, capturedTotalDamage) : capturedTotalDamage;
+		iinactTotalHealing = trustStoredIinactTotals || !hasCapturedActions ? Math.Max(restoredHealing, capturedTotalHealing) : capturedTotalHealing;
+		iinactDamageHitCount = trustStoredIinactTotals || !hasCapturedActions ? Math.Max(restoredHits, capturedDamageHitCount) : capturedDamageHitCount;
+		iinactCriticalDamageHits = trustStoredIinactTotals || !hasCapturedActions ? Math.Max(restoredCriticalHits, capturedCriticalDamageHits) : capturedCriticalDamageHits;
+		iinactDirectDamageHits = trustStoredIinactTotals || !hasCapturedActions ? Math.Max(restoredDirectHits, capturedDirectDamageHits) : capturedDirectDamageHits;
+		iinactCriticalDirectDamageHits = trustStoredIinactTotals || !hasCapturedActions ? Math.Max(restoredCriticalDirectHits, capturedCriticalDirectDamageHits) : capturedCriticalDirectDamageHits;
+		UpdateIinactReconciliation();
 	}
 
 	internal void AddUnbuffedObservation(EffectSample effect, bool hasExternalCriticalBuff, bool hasExternalDirectHitBuff)
@@ -299,6 +332,34 @@ public sealed class PlayerPhaseStatistics
 			return;
 		}
 		intervals.Add((start, end));
+	}
+
+	private void UpdateIinactReconciliation()
+	{
+		if (!iinactTotalDamage.HasValue && !iinactTotalHealing.HasValue && !iinactDamageHitCount.HasValue)
+		{
+			Actions.Remove(IinactReconciliationActionId);
+			return;
+		}
+
+		long damage = Math.Max(0, TotalDamage - capturedTotalDamage);
+		long healing = Math.Max(0, TotalHealing - capturedTotalHealing);
+		int hits = Math.Max(0, DamageHitCount - capturedDamageHitCount);
+		int criticalHits = Math.Max(0, CriticalDamageHits - capturedCriticalDamageHits);
+		int directHits = Math.Max(0, DirectDamageHits - capturedDirectDamageHits);
+		int criticalDirectHits = Math.Max(0, CriticalDirectDamageHits - capturedCriticalDirectDamageHits);
+		if (damage == 0 && healing == 0 && hits == 0 && criticalHits == 0 && directHits == 0 && criticalDirectHits == 0)
+		{
+			Actions.Remove(IinactReconciliationActionId);
+			return;
+		}
+
+		if (!Actions.TryGetValue(IinactReconciliationActionId, out ActionStatistics? reconciliation))
+		{
+			reconciliation = new ActionStatistics(IinactReconciliationActionId, IinactReconciliationActionName, ActionKind.Other, healing > 0);
+			Actions[IinactReconciliationActionId] = reconciliation;
+		}
+		reconciliation.SetIinactReconciliation(damage, healing, hits, criticalHits, directHits, criticalDirectHits);
 	}
 
 	private static double ActiveRate(IReadOnlyList<(DateTime Start, DateTime End)> intervals, DateTime phaseStart, DateTime phaseEnd)

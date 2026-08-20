@@ -39,9 +39,11 @@ internal sealed class IinactPhaseSynchronizer
 		phase.MarkIinactSynchronized(baseline.Sequence, hasData: false);
 	}
 
-	public bool Apply(PhaseRecord phase, IinactCombatSnapshot current, uint localPlayerEntityId = 0)
+	public bool Apply(PhaseRecord phase, IinactCombatSnapshot current, uint localPlayerEntityId = 0, bool allowInactiveFinal = false)
 	{
-		if (!baselines.TryGetValue(phase, out IinactCombatSnapshot? baseline) || current.Combatants.Count == 0)
+		if ((!current.IsActive && !allowInactiveFinal)
+			|| !baselines.TryGetValue(phase, out IinactCombatSnapshot? baseline)
+			|| current.Combatants.Count == 0)
 		{
 			return false;
 		}
@@ -50,16 +52,11 @@ internal sealed class IinactPhaseSynchronizer
 		{
 			localPlayerEntityId = phase.Players.Keys.Single();
 		}
-		bool sameEncounter = string.IsNullOrWhiteSpace(baseline.EncounterId)
-			|| string.IsNullOrWhiteSpace(current.EncounterId)
-			|| string.Equals(baseline.EncounterId, current.EncounterId, StringComparison.Ordinal);
 		foreach (PlayerPhaseStatistics player in phase.Players.Values)
 		{
 			bool isLocalPlayer = player.EntityId == localPlayerEntityId;
 			IinactCombatantSnapshot currentValue = SumForPlayer(current.Combatants.Values, player.PlayerName, isLocalPlayer);
-			IinactCombatantSnapshot baselineValue = sameEncounter
-				? SumForPlayer(baseline.Combatants.Values, player.PlayerName, isLocalPlayer)
-				: Zero(player.PlayerName);
+			IinactCombatantSnapshot baselineValue = SumForPlayer(baseline.Combatants.Values, player.PlayerName, isLocalPlayer);
 			long damage = PositiveDelta(currentValue.Damage, baselineValue.Damage);
 			long healing = PositiveDelta(currentValue.Healing, baselineValue.Healing);
 			long damageTaken = PositiveDelta(currentValue.DamageTaken, baselineValue.DamageTaken);
